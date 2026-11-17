@@ -62,11 +62,10 @@ Map<String, dynamic> defaultConfigJson() => {
       'memo_exclude_keywords': <String>[],
       'memo_include_keywords': <String>[],
       'blacklist': <String>[],
-      // No per-shop confirm wait by default: the upstream poller proved
-      // that confirm works without entering the order page first, so
-      // waiting only delays the first confirm and loses orders. The
-      // table stays available for user-tuned shops.
-      'confirm_wait_by_shop': <String, double>{},
+      // Same defaults as DPPP (pc/config.py): the per-shop confirm
+      // wait stays user-tunable, shop 92 waits 5s before the first
+      // confirm, shops 50/105/1391 wait 3s.
+      'confirm_wait_by_shop': {'92': 5.0, '50': 3.0, '105': 3.0, '1391': 3.0},
       'rotate_enabled': false,
       'rotate_minutes': 30,
       'confirm_wait_min': 0.0,

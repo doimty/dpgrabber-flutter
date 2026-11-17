@@ -95,23 +95,6 @@ class Notifier {
         '金额 ${amount.toStringAsFixed(2)} 元\n订单 $orderNo\n时间 $grabbedAt',
       );
 
-  /// Outcome push for non-success results, mirroring the upstream
-  /// duopei-poller which also notifies failed/unknown outcomes:
-  /// title `[{order-tail}] {result}`, body `订单 <no> ￥<amount>`.
-  Future<bool> sendOutcome({
-    required String result,
-    required String orderNo,
-    required double amount,
-  }) {
-    final tail = orderNo.length > 4
-        ? orderNo.substring(orderNo.length - 4)
-        : orderNo;
-    return send(
-      '[$tail] $result',
-      '订单 $orderNo ￥${amount.toStringAsFixed(2)}',
-    );
-  }
-
   Future<bool> _bark(String title, String body) async {
     final key = config.notifyKey.trim();
     if (key.isEmpty) return false;

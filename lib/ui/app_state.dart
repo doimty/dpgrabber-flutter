@@ -554,22 +554,7 @@ class AppState extends ChangeNotifier {
       return; // already recorded by onGrab (§1.6/§7.3 dedup)
     }
     historyStore.append(entry);
-    unawaited(_pushOutcome(entry, outcome));
     notifyListeners();
-  }
-
-  /// Failure/unknown outcome push, mirroring the upstream duopei-poller
-  /// which notifies failed/unknown results too (not only grabs).
-  /// pending/skipped stay silent to avoid spamming.
-  Future<void> _pushOutcome(HistoryEntry entry, HistoryOutcome outcome) async {
-    const pushable = {HistoryOutcome.failed, HistoryOutcome.unknown};
-    if (!pushable.contains(outcome)) return;
-    if (!notifier.enabled) return;
-    await notifier.sendOutcome(
-      result: outcomeLabel(outcome.name),
-      orderNo: entry.no,
-      amount: entry.amount,
-    );
   }
 
   // -- account rotation (UI layer, §12 Q-12 / core deviation #5) --------
