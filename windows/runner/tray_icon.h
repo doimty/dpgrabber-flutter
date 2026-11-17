@@ -24,8 +24,10 @@
 #include <flutter/binary_messenger.h>
 #include <flutter/method_channel.h>
 #include <flutter/standard_method_codec.h>
-#include <shellapi.h>
+// windows.h must come first: shellapi.h uses its types (HDROP,
+// DECLSPEC_IMPORT) and fails to compile on its own.
 #include <windows.h>
+#include <shellapi.h>
 
 #include <memory>
 #include <string>

@@ -6,10 +6,15 @@ plugins {
 
 android {
     namespace = "com.doimty.dpgrabber"
-    compileSdk = flutter.compileSdkVersion
+    // flutter_local_notifications 23.x (and its androidx.core 1.19.0) requires
+    // compileSdk 37; flutter.compileSdkVersion is still 36 in Flutter 3.47.
+    // targetSdk stays flutter.targetSdkVersion (runtime behaviour unchanged).
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // Required by flutter_local_notifications 23.x (uses java.time APIs).
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -42,6 +47,11 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    // Must match the version flutter_local_notifications 23.x uses.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 flutter {
