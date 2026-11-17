@@ -14,8 +14,10 @@ void main() {
       expect(cfg.pollJitterSec, 0.2);
       expect(cfg.pollFailureMaxSec, 20.0);
       expect(cfg.busyCooldownSec, 60.0);
-      expect(cfg.confirmWaitByShop,
-          {'92': 5.0, '50': 3.0, '105': 3.0, '1391': 3.0});
+      // No default confirm wait: the upstream poller proved confirm
+      // works without entering the order page first, so waiting only
+      // delays the first confirm. The table stays user-tunable.
+      expect(cfg.confirmWaitByShop, isEmpty);
       expect(cfg.runRestEnabled, isTrue);
       expect(cfg.riskRunMin, 50);
       expect(cfg.riskRunMax, 60);
