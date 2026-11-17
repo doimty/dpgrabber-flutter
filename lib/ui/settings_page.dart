@@ -11,8 +11,10 @@ library;
 
 import 'dart:async';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
+import '../background/background_support.dart' show AppException;
 import '../core.dart';
 import '../theme/glass.dart';
 import '../theme/palette.dart';
@@ -261,6 +263,70 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Widget _backgroundRow(BuildContext context, {required bool dark}) {
+    final palette = _state.theme.palette;
+    final settings = _state.background.settings;
+    final picture = dark ? settings.night : settings.day;
+    return Row(
+      children: [
+        Text(dark ? '夜间背景' : '白天背景', style: TextStyle(color: palette.textDark)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            picture == null
+                ? '未设置（使用主题底色）'
+                : '已设置（${picture.width}×${picture.height}）',
+            style: TextStyle(color: palette.hint, fontSize: 13),
+          ),
+        ),
+        TextButton(
+          onPressed: () => unawaited(_pickBackground(dark)),
+          child: const Text('选择图片'),
+        ),
+        if (picture != null)
+          TextButton(
+            onPressed: () => unawaited(_state.background.clearPicture(dark: dark)),
+            child: const Text('清除'),
+          ),
+      ],
+    );
+  }
+
+  Widget _backgroundParam(String label, String value) {
+    final palette = _state.theme.palette;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: TextStyle(color: palette.textDark, fontSize: 13)),
+          Text(value, style: TextStyle(color: palette.hint, fontSize: 13)),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickBackground(bool dark) async {
+    try {
+      final file = await openFile(
+        acceptedTypeGroups: [
+          const XTypeGroup(
+            label: '图片',
+            extensions: ['png', 'jpg', 'jpeg', 'webp'],
+          ),
+        ],
+      );
+      if (file == null) return;
+      await _state.background.importImage(file, dark: dark);
+      _state.logs.add(LogLevel.info, dark ? '已设置夜间背景' : '已设置白天背景');
+      if (mounted) setState(() {});
+    } on AppException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = '背景图片处理失败，请换一张重试');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = _state.theme.palette;
@@ -360,6 +426,62 @@ class _SettingsPageState extends State<SettingsPage> {
                         _state.glass.setLowPower(v);
                         setState(() {});
                       },
+                    ),
+                  ],
+                ),
+              ),
+              // Background wallpaper (wenxi background system).
+              const SectionTitle('背景'),
+              AppCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _backgroundRow(context, dark: false),
+                    const SizedBox(height: 4),
+                    _backgroundRow(context, dark: true),
+                    const SizedBox(height: 12),
+                    _backgroundParam(
+                      '卡片不透明度',
+                      _state.background.settings.cardOpacity
+                          .toStringAsFixed(2),
+                    ),
+                    Slider(
+                      value: _state.background.settings.cardOpacity,
+                      min: 0.6,
+                      max: 1,
+                      divisions: 40,
+                      label: _state.background.settings.cardOpacity
+                          .toStringAsFixed(2),
+                      onChanged: (v) => unawaited(
+                        _state.background.update(cardOpacity: v),
+                      ),
+                    ),
+                    _backgroundParam(
+                      '背景模糊',
+                      _state.background.settings.blur.toStringAsFixed(0),
+                    ),
+                    Slider(
+                      value: _state.background.settings.blur,
+                      min: 0,
+                      max: 20,
+                      divisions: 20,
+                      label: _state.background.settings.blur.toStringAsFixed(0),
+                      onChanged: (v) =>
+                          unawaited(_state.background.update(blur: v)),
+                    ),
+                    _backgroundParam(
+                      '背景亮度',
+                      _state.background.settings.brightness.toStringAsFixed(2),
+                    ),
+                    Slider(
+                      value: _state.background.settings.brightness,
+                      min: 0.35,
+                      max: 1,
+                      divisions: 65,
+                      label: _state.background.settings.brightness
+                          .toStringAsFixed(2),
+                      onChanged: (v) =>
+                          unawaited(_state.background.update(brightness: v)),
                     ),
                   ],
                 ),

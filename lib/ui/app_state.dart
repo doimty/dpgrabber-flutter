@@ -24,6 +24,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../bridge/bridge.dart';
+import '../background/background_repository.dart';
 import '../core.dart';
 import '../theme/app_theme.dart';
 import '../theme/glass.dart';
@@ -88,11 +89,16 @@ class AppState extends ChangeNotifier {
   bool _engineRebuilding = false;
 
   AppState({required this.appDir, CredentialStore? store})
-      : store = store ?? FileCredentialStore(appDir),
-        accounts = AccountStore(appDir),
-        historyStore = HistoryStore(
-          File('${appDir.path}/dpgrabber_history.json'),
-        );
+    : store = store ?? FileCredentialStore(appDir),
+      accounts = AccountStore(appDir),
+      background = BackgroundController(appDir),
+      historyStore = HistoryStore(
+        File('${appDir.path}/dpgrabber_history.json'),
+      );
+
+  /// Wallpaper settings + content-addressed image store (wenxi
+  /// background system). Persisted under appDir/backgrounds/.
+  final BackgroundController background;
 
   bool get hasSecureStorage => store.isSecureStorage;
 
@@ -128,6 +134,7 @@ class AppState extends ChangeNotifier {
     voice.enabled = config.voiceEnabled;
     _buildClientAndEngine();
     savedAccounts = accounts.listAccounts();
+    await background.load();
     initialized = true;
     if (!hasSecureStorage) {
       logs.add(
@@ -547,7 +554,22 @@ class AppState extends ChangeNotifier {
       return; // already recorded by onGrab (§1.6/§7.3 dedup)
     }
     historyStore.append(entry);
+    unawaited(_pushOutcome(entry, outcome));
     notifyListeners();
+  }
+
+  /// Failure/unknown outcome push, mirroring the upstream duopei-poller
+  /// which notifies failed/unknown results too (not only grabs).
+  /// pending/skipped stay silent to avoid spamming.
+  Future<void> _pushOutcome(HistoryEntry entry, HistoryOutcome outcome) async {
+    const pushable = {HistoryOutcome.failed, HistoryOutcome.unknown};
+    if (!pushable.contains(outcome)) return;
+    if (!notifier.enabled) return;
+    await notifier.sendOutcome(
+      result: outcomeLabel(outcome.name),
+      orderNo: entry.no,
+      amount: entry.amount,
+    );
   }
 
   // -- account rotation (UI layer, §12 Q-12 / core deviation #5) --------

@@ -247,6 +247,12 @@ void main() {
     testWidgets('invalid number is rejected on save', (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
+      // Enlarge the viewport so the lazily-built order-condition card
+      // (below the theme and background sections) is built and visible.
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
       await tester.pumpAndSettle();
       final field = find.widgetWithText(TextField, '不低于此价才抢');

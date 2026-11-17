@@ -8,6 +8,7 @@ enum SkeletonLayout {
   searchResults,
   recommendations,
   resourceCatalog,
+  dashboard,
 }
 
 /// A single sweep crosses all placeholders; ticks only repaint this canvas.
@@ -180,7 +181,19 @@ class _SkeletonMetrics {
     SkeletonLayout.recommendations =>
       (count / columns(width)).ceil() * (recommendationHeight + 12),
     SkeletonLayout.resourceCatalog => catalogHeight(width),
+    SkeletonLayout.dashboard => dashboardHeight(width),
   };
+
+  /// Listen-page first screen: hero card, clerk card, action button,
+  /// three stat blocks and a log card.
+  double dashboardHeight(double width) {
+    final scale = math.max(1.0, title / 14);
+    final statsColumns = isWide(width) ? 4 : 3;
+    final statWidth = (width - 32 - (statsColumns - 1) * 12) / statsColumns;
+    return (104 + 12 + 72 + 12 + 48 + 12 + 68 + 12 + (72 + statWidth * .5) +
+            12 + 56 + 3 * (34 * scale + 12)) *
+        scale;
+  }
 
   double catalogHeight(double width) {
     final popularColumns = isWide(width) ? 4 : 2;
@@ -455,6 +468,57 @@ class _SkeletonPainter extends CustomPainter {
 
   static const _nameWidths = [.78, .56, .9, .64, .82];
 
+  /// Listen dashboard: hero, clerk row, action button, stat blocks and
+  /// a run-log card, mirroring the real page's grouped-card composition.
+  void _dashboard(Size size) {
+    final width = size.width;
+    final scale = math.max(1.0, metrics.title / 14);
+    var y = 16.0;
+    // Hero card.
+    _card(0, y, width, 104, 16);
+    _line(16, y + 18, width - 32, .55, 22 * scale);
+    _block(16, y + 52, 92 * scale, 22, 7);
+    _block(120 * scale, y + 52, 72 * scale, 22, 7);
+    y += 104 + 12;
+    // Clerk row.
+    _card(0, y, width, 72, 16);
+    _block(16, y + 15, 42, 42, 21);
+    final clerkX = 74.0;
+    _line(clerkX, y + 19, width - clerkX - 60, .42, metrics.title);
+    _line(clerkX, y + 26 + metrics.title, width - clerkX - 60, .3,
+        metrics.detail);
+    _line(width - 56, y + 22, 40, .5, metrics.detail * .8);
+    y += 72 + 12;
+    // Action button.
+    _block(0, y, width, 48, 24);
+    y += 48 + 12;
+    // Stat blocks.
+    final statColumns = metrics.isWide(width) ? 4 : 3;
+    final statWidth = (width - (statColumns - 1) * 12) / statColumns;
+    for (var column = 0; column < statColumns; column++) {
+      final x = column * (statWidth + 12);
+      _card(x, y, statWidth, 68, 14);
+      _line(x + 12, y + 13, statWidth - 24, .6, metrics.detail);
+      _line(x + 12, y + 30, statWidth - 24, .8, 20 * scale);
+    }
+    y += 68 + 12;
+    // Run-log card with a few entries.
+    final logRows = math.max(2, ((size.height - y - 56) / (34 * scale + 12))
+        .floor()
+        .clamp(2, 6));
+    _card(0, y, width, 56 + logRows * (34 * scale + 12), 16);
+    _line(16, y + 18, 88 * scale, .5, metrics.title);
+    _line(width - 96, y + 20, 80, .4, metrics.detail * .8);
+    var rowY = y + 44;
+    for (var row = 0; row < logRows; row++) {
+      _block(16, rowY + 4, 44 * scale, 12, 3);
+      _block(70 * scale, rowY + 4, 26 * scale, 12, 3);
+      _line(110 * scale, rowY + 2, width - 110 * scale - 32,
+          _nameWidths[row % 5], metrics.detail);
+      rowY += 34 * scale + 12;
+    }
+  }
+
   void _layout(Size size) {
     if (_cachedSize == size) return;
     _cachedSize = size;
@@ -471,6 +535,8 @@ class _SkeletonPainter extends CustomPainter {
         _results(size, recommendations: true);
       case SkeletonLayout.resourceCatalog:
         _catalog(size);
+      case SkeletonLayout.dashboard:
+        _dashboard(size);
     }
   }
 

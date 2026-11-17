@@ -19,6 +19,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'background/app_background.dart';
 import 'bridge/bridge.dart';
 import 'theme/glass.dart' show GlassLevel;
 import 'ui/app_state.dart';
@@ -27,6 +28,7 @@ import 'ui/navigation.dart';
 import 'wenxi_ui/app_text_scale.dart';
 import 'wenxi_ui/app_theme.dart';
 import 'wenxi_ui/appearance.dart';
+import 'wenxi_ui/skeleton_loading.dart';
 import 'wenxi_ui/theme_reveal.dart';
 
 Future<void> main() async {
@@ -75,15 +77,31 @@ class DpgApp extends StatelessWidget {
             glassStyle: glassStyle,
             glassLowPower: state.glass.lowPower,
           ),
-          builder: (context, child) => ThemeRevealHost(
-            child: AppTextScale(percent: 100, child: child ?? const SizedBox()),
+          builder: (context, child) => AppBackground(
+            controller: state.background,
+            child: ThemeRevealHost(
+              child: AppTextScale(
+                percent: 100,
+                child: child ?? const SizedBox(),
+              ),
+            ),
           ),
           home: AnimatedBuilder(
             animation: state,
             builder: (context, _) {
               if (!state.initialized) {
-                return const Scaffold(
-                  body: Center(child: CircularProgressIndicator()),
+                return Scaffold(
+                  body: SafeArea(
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 720),
+                        child: AppSkeleton(
+                          layout: SkeletonLayout.dashboard,
+                          semanticLabel: '正在初始化多陪抢单',
+                        ),
+                      ),
+                    ),
+                  ),
                 );
               }
               if (!state.loggedIn) {
