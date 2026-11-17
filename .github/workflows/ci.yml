@@ -1,0 +1,183 @@
+name: CI
+
+# dpgrabber (Flutter, com.doimty.dpgrabber) — CI for doimty/dpgrabber-flutter.
+#
+# STRUCTURE: a single file with four jobs, not one file per platform.
+# Reason: unlike the old dpgrabber-standalone repo (three separate native
+# codebases with path filters), this is one Flutter codebase — every push to
+# main should exercise all four jobs from the same commit, so one trigger
+# definition and one place to review beats three copies of the same trigger
+# and Flutter setup. GitHub still lets you re-run only the failed jobs of
+# a run, so splitting files buys nothing here.
+#
+# PARALLELISM (deliberate): none of the build jobs declares
+# `needs: analyze-test`. All four jobs run in parallel from the same commit.
+# Reason: wall-clock time and failure isolation — a lint/test failure must
+# not block the APK/IPA/exe artifacts, and a slow macOS queue must not
+# block the Linux/Windows results. analyze-test is the quality gate for
+# humans reading the run, not a build dependency.
+#
+# COST (GitHub minute multipliers: ubuntu 1x, Windows 2x, macOS 10x):
+# trigger is push-to-main only, plus manual workflow_dispatch for a
+# deliberate re-run. No pull_request, no schedule, so no PR or timer ever
+# burns macOS minutes. Artifacts are kept 7 days only (retention-days: 7).
+#
+# TOOLCHAIN: Flutter 3.47.9 stable, pinned (subosito/flutter-action@v2).
+# No secrets are used anywhere: all builds are unsigned / release builds
+# that need no signing credentials.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze-test:
+    name: Analyze & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter 3.47.9
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter 3.47.9
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dpgrabber-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  build-ios:
+    name: Build unsigned iOS IPA
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter 3.47.9
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      # Xcode is deliberately NOT pinned here.
+      # Basis (checked 2026-11-17, actions/runner-images macos-26 readme,
+      # image 20260824.0517.1): GitHub-hosted macos-26 ships Xcode
+      # 26.0.1-26.6 only, default 26.6 (/Applications/Xcode_26.6.app,
+      # symlinked as /Applications/Xcode.app). Xcode 27 exists only as a
+      # public preview (runner-images issue 14404) and is NOT on this
+      # image — pinning it would fail the job. Flutter 3.47 does prepare
+      # for Xcode 27 / the iOS 27 SDK (Apple requires the iOS 27 SDK for
+      # App Store uploads from April 2027), but this build is unsigned
+      # for re-signing, not an App Store upload, so the runner default
+      # is correct for now. Print the version so the log records what
+      # actually ran; revisit when a macOS image with Xcode 27 ships.
+      - name: Show Xcode version (runner default)
+        run: xcodebuild -version
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # --no-codesign produces build/ios/iphoneos/Runner.app only — no
+      # .ipa. The IPA is assembled by hand below, same Payload layout as
+      # the old dpgrabber-standalone ios.yml: Payload/Runner.app zipped.
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign
+
+      - name: Package unsigned IPA
+        run: |
+          APP="build/ios/iphoneos/Runner.app"
+          test -d "$APP"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist"
+          rm -rf Payload dpgrabber-unsigned.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qr dpgrabber-unsigned.ipa Payload
+          ls -lh dpgrabber-unsigned.ipa
+          unzip -l dpgrabber-unsigned.ipa | head -20
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: dpgrabber-ios-unsigned
+          path: dpgrabber-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    name: Build Windows exe
+    # windows-2022, NOT windows-2025. Reason: GitHub moved windows-2025
+    # (and windows-latest) to Visual Studio 2026 in mid-2026, while
+    # windows-2022 is the lane that still ships Visual Studio 2022 —
+    # the toolchain Flutter's Windows desktop build targets
+    # ("Desktop development with C++"). VS 2026 on windows-2025 is
+    # unproven with Flutter 3.47, so the VS 2022 image is the safe pin.
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter 3.47.9
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release Windows app
+        run: flutter build windows --release
+
+      # Upload the whole Release directory, not just the exe: the exe
+      # alone will not run — it needs flutter_windows.dll, the data/
+      # directory (icudtl.dat, app.so) and any plugin DLLs next to it.
+      - name: Upload Windows release directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: dpgrabber-windows
+          path: build/windows/x64/runner/Release
+          if-no-files-found: error
+          retention-days: 7
