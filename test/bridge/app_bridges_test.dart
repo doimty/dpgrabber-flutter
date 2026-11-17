@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:dpgrabber/bridge/app_bridges.dart';
 import 'package:dpgrabber/bridge/keep_alive.dart';
 import 'package:dpgrabber/bridge/secure_credential_store.dart';
+import 'package:dpgrabber/core/credential_store.dart';
 
 import 'local_notifications_test.dart' show FakeBackend;
 import 'secure_credential_store_test.dart' show MemoryBackend;
@@ -48,8 +49,15 @@ void main() {
       notificationBackend: backend,
     );
 
-    expect(bridges.credentialStore, isA<SecureCredentialStore>());
-    expect(bridges.credentialStore.isSecureStorage, isTrue);
+    // Windows intentionally uses the plain-file store (same as the DPPP
+    // PC build); other platforms use the secure store.
+    if (Platform.isWindows) {
+      expect(bridges.credentialStore, isA<FileCredentialStore>());
+      expect(bridges.credentialStore.isSecureStorage, isFalse);
+    } else {
+      expect(bridges.credentialStore, isA<SecureCredentialStore>());
+      expect(bridges.credentialStore.isSecureStorage, isTrue);
+    }
     expect(backend.initialized, isTrue);
 
     // Credential round-trip through the wired store.

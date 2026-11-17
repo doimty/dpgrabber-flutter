@@ -41,10 +41,13 @@ class AppBridges {
     TrayBackend? trayBackend,
   }) async {
     final dir = configDirectory ?? await getApplicationDocumentsDirectory();
-    final store = SecureCredentialStore(
-      dir,
-      backend: storageBackend,
-    );
+    // Windows: plain local file, exactly like the DPPP PC build (which
+    // keeps accounts/ as JSON in the documents dir). flutter_secure_storage's
+    // Windows backend has a history of read-after-restart reliability
+    // issues, which would surface as "logged out on second launch".
+    final store = Platform.isWindows
+        ? FileCredentialStore(dir)
+        : SecureCredentialStore(dir, backend: storageBackend);
     final keepAlive = KeepAlive(channel: keepAliveChannel);
     final notifications =
         LocalNotifications(backend: notificationBackend);

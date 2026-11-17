@@ -60,7 +60,7 @@ class FileCredentialStore implements CredentialStore {
 
   /// Warning the UI must show while this store is in use.
   static const String unencryptedWarning =
-      '凭据未加密存储（开发期占位实现），正式版将改用系统安全存储';
+      '凭据保存在本机用户目录下的文件中（与 PC 版一致），未加密';
 
   File get _credentialsFile =>
       File('${directory.path}/credentials_dev.json');
