@@ -2,9 +2,16 @@
 /// (PORTING_CONTRACT §1.7, §2, D-42, Q-12).
 ///
 /// Contract shape: [CredentialStore] is the abstract interface the core
-/// depends on; the production implementation is platform secure storage
-/// (Android EncryptedSharedPreferences / iOS Keychain via
-/// `flutter_secure_storage`) and is owned by the bridge sub-agent.
+/// depends on. The production implementation is [FileCredentialStore]
+/// (plain JSON under the app documents directory): the platform secure
+/// store (Android EncryptedSharedPreferences / iOS Keychain via
+/// `flutter_secure_storage`) is namespaced by the signing identity, and
+/// the unsigned IPA is re-signed before install, so a re-signed build
+/// cannot read credentials saved by a differently-signed build — users
+/// silently lost their login on relaunch. The file store survives
+/// re-signing, exactly like the DPPP PC build. [SecureCredentialStore]
+/// is kept only as the one-time migration source for accounts saved by
+/// older builds (see `AppBridges.initialize`).
 ///
 /// [FileCredentialStore] is a DEVELOPMENT-ONLY implementation that keeps
 /// credentials in a plain JSON file under the app documents directory.
@@ -42,10 +49,22 @@ abstract class CredentialStore {
   Future<void> saveConfig(AppConfig config);
 }
 
-/// Development-only plain-file credential store.
+/// Plain-file credential store, used on ALL platforms.
 ///
 /// File: `<directory>/credentials_dev.json` — a JSON map
-/// `{digitsPhone: password}`. Plaintext. Never ship this.
+/// `{digitsPhone: password}`. Plaintext. The UI must show the
+/// "credentials are not encrypted" warning whenever it is in use
+/// (§1.7: never silently downgrade).
+///
+/// Why not the platform secure store: `flutter_secure_storage` (iOS
+/// Keychain / Android EncryptedSharedPreferences) is namespaced by the
+/// signing identity, and the unsigned IPA is re-signed before install —
+/// a re-signed build cannot read Keychain items saved by a
+/// differently-signed build, so users silently lost their login on
+/// relaunch. The plain file survives re-signing, exactly like the DPPP
+/// PC build. [SecureCredentialStore] is kept only as the one-time
+/// migration source for accounts saved by older builds (see
+/// [AppBridges.initialize]).
 class FileCredentialStore implements CredentialStore {
   final Directory directory;
 

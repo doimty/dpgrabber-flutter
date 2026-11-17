@@ -8,6 +8,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../wenxi_ui/app_navigation.dart';
+import '../wenxi_ui/liquid_bottom_navigation.dart';
 import 'app_state.dart';
 import 'history_page.dart';
 import 'listen_page.dart';
@@ -42,7 +43,7 @@ class _AppShellState extends State<AppShell> {
         builder: (context, _) {
           return LayoutBuilder(
             builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 720;
+              final wide = constraints.maxWidth >= kFloatingNavBreakpoint;
               final pages = [
                 ListenPage(state: widget.state),
                 HistoryPage(state: widget.state),
@@ -65,9 +66,25 @@ class _AppShellState extends State<AppShell> {
                   ),
                 );
               }
+              // Phones: the pill truly floats — the body extends under
+              // it (Stack overlay, not the Scaffold's bottomNavigationBar
+              // slot, which reserves a band and leaves a blank strip
+              // around the pill). Pages reserve bottomNavClearance()
+              // at the bottom of their scroll views so the last row
+              // clears the pill; content scrolls visibly underneath it.
               return Scaffold(
-                body: IndexedStack(index: _index, children: pages),
-                bottomNavigationBar: navigation,
+                extendBody: true,
+                body: Stack(
+                  children: [
+                    IndexedStack(index: _index, children: pages),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: navigation,
+                    ),
+                  ],
+                ),
               );
             },
           );

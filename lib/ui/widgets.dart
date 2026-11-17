@@ -3,6 +3,7 @@
 /// hardcoded here.
 library;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -10,6 +11,7 @@ import '../core.dart';
 import '../theme/app_theme.dart';
 import '../theme/glass.dart';
 import '../theme/palette.dart';
+import '../wenxi_ui/app_switch.dart';
 import '../wenxi_ui/liquid_glass.dart';
 import 'app_state.dart';
 
@@ -200,7 +202,14 @@ class SwitchRow extends StatelessWidget {
               ],
             ),
           ),
-          Switch(value: value, onChanged: onChanged),
+          // Wenxi's own switch (52x32, spring thumb) instead of the
+          // Material Switch: the Material track/thumb reads Android-ish
+          // on iOS.
+          AppSwitch(
+            value: value,
+            onChanged: onChanged,
+            semanticLabel: label,
+          ),
         ],
       ),
     );
@@ -229,7 +238,14 @@ class CheckRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
-          Checkbox(value: value, onChanged: onChanged),
+          // Rounded iOS-style checkbox instead of the square Material
+          // one; the checked fill follows the palette accent.
+          CupertinoCheckbox(
+            value: value,
+            onChanged: onChanged,
+            activeColor: palette.accent,
+            semanticLabel: label,
+          ),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

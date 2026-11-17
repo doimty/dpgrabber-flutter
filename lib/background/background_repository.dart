@@ -38,21 +38,34 @@ class BackgroundRepository {
   }
 
   Future<BackgroundPicture> importFile(XFile source, Object draft) async {
-    require(
-      await source.length() <= backgroundSourceMaxBytes,
-      '请选择不超过 24 MB 的图片',
-    );
-    // Cap reads as well as metadata; some Android document providers omit size.
-    final builder = BytesBuilder(copy: false);
-    await for (final chunk in source.openRead()) {
+    // A picked file can be unreadable on iOS (an iCloud photo not
+    // downloaded to the device, or a Files placeholder): length() /
+    // openRead() then throw a platform/IO error, not an AppException.
+    // Convert it so the caller can show the real cause instead of a
+    // generic banner.
+    late final Uint8List bytes;
+    try {
       require(
-        builder.length + chunk.length <= backgroundSourceMaxBytes,
+        await source.length() <= backgroundSourceMaxBytes,
         '请选择不超过 24 MB 的图片',
       );
-      builder.add(chunk);
+      // Cap reads as well as metadata; some Android document providers omit size.
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in source.openRead()) {
+        require(
+          builder.length + chunk.length <= backgroundSourceMaxBytes,
+          '请选择不超过 24 MB 的图片',
+        );
+        builder.add(chunk);
+      }
+      bytes = builder.takeBytes();
+    } on AppException {
+      rethrow;
+    } catch (e) {
+      throw AppException('无法读取这张图片文件：$e，请换一张已下载到本机的图片');
     }
-    final bytes = await prepareBackgroundImage(builder.takeBytes());
-    return _save(bytes, draft);
+    final processed = await prepareBackgroundImage(bytes);
+    return _save(processed, draft);
   }
 
   Future<BackgroundPicture> _save(Uint8List bytes, Object draft) =>

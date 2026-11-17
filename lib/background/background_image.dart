@@ -17,6 +17,14 @@ Future<Uint8List> prepareBackgroundImage(Uint8List bytes) async {
     bytes.isNotEmpty && bytes.length <= backgroundSourceMaxBytes,
     '请选择不超过 24 MB 的图片',
   );
+  // iOS Photos saves in HEIC by default and the engine cannot decode
+  // it; without this check the failure surfaces as a generic "pick
+  // another image" error. Detect the ISO-BMFF ftyp brand up front so
+  // the user gets an actionable message.
+  require(
+    !_isHeic(bytes),
+    '这张图片是 HEIC 格式（iOS 相册默认格式），暂不支持，请换一张 JPG/PNG/WebP 图片，或在 iPhone 设置 → 相机 → 格式中选择“兼容性最佳”',
+  );
   final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
   ui.ImageDescriptor? descriptor;
   try {
@@ -63,6 +71,26 @@ Future<Uint8List> prepareBackgroundImage(Uint8List bytes) async {
     descriptor?.dispose();
     buffer.dispose();
   }
+}
+
+/// ISO-BMFF files start with an `ftyp` box; the brand at bytes 8..12
+/// identifies HEIC/HEIF (and the related MIF1/MSF1 containers).
+bool _isHeic(Uint8List bytes) {
+  if (bytes.length < 12) return false;
+  if (String.fromCharCodes(bytes.sublist(4, 8)) != 'ftyp') return false;
+  const brands = {
+    'heic',
+    'heix',
+    'hevc',
+    'hevx',
+    'heim',
+    'heis',
+    'hevm',
+    'hevs',
+    'mif1',
+    'msf1',
+  };
+  return brands.contains(String.fromCharCodes(bytes.sublist(8, 12)));
 }
 
 (int, int) backgroundPngSize(Uint8List bytes) {

@@ -7,11 +7,13 @@
 /// 白名单 / 复制订单号 (§7.5).
 library;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core.dart';
 import '../theme/app_theme.dart';
+import '../wenxi_ui/liquid_bottom_navigation.dart';
 import 'app_state.dart';
 import 'widgets.dart';
 
@@ -218,11 +220,13 @@ class _HistoryPageState extends State<HistoryPage> {
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Checkbox(
+                        CupertinoCheckbox(
                           value: _allAccounts,
                           onChanged: (v) => setState(
                             () => _allAccounts = v ?? false,
                           ),
+                          activeColor: palette.accent,
+                          semanticLabel: '全部账号',
                         ),
                         Text(
                           '全部账号',
@@ -242,7 +246,14 @@ class _HistoryPageState extends State<HistoryPage> {
                         ),
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        // The floating pill overlays the body: reserve
+                        // its height at the bottom so the last entry
+                        // clears it.
+                        padding: EdgeInsets.only(
+                          left: 16,
+                          right: 16,
+                          bottom: bottomNavClearance(context),
+                        ),
                         itemCount: entries.length,
                         itemBuilder: (context, index) {
                           final entry = entries[index];

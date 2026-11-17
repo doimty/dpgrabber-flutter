@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import '../core.dart';
 import '../theme/app_theme.dart';
 import '../theme/palette.dart';
+import '../wenxi_ui/liquid_bottom_navigation.dart';
 import '../wenxi_ui/liquid_glass.dart';
 import 'app_state.dart';
 import 'log_store.dart';
@@ -94,7 +95,14 @@ class _ListenPageState extends State<ListenPage> {
         return Scaffold(
           appBar: AppBar(title: const Text('监听')),
           body: ListView(
-            padding: const EdgeInsets.all(16),
+            // The floating pill overlays the body: reserve its height
+            // (plus air) at the bottom so the log section clears it.
+            padding: EdgeInsets.fromLTRB(
+              16,
+              16,
+              16,
+              16 + bottomNavClearance(context),
+            ),
             children: [
               // Hero: title + today count + listen/login status.
               // A plain card, not a saturated gradient band (design

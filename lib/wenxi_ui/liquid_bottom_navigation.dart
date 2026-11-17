@@ -20,6 +20,35 @@ import 'liquid_glass.dart';
 
 enum _NavigationGesture { drag, longPress }
 
+/// Width at/above which the app uses the side rail instead of the
+/// floating bottom pill (same breakpoint as the shell in
+/// `lib/ui/navigation.dart`).
+const kFloatingNavBreakpoint = 720.0;
+
+/// Content height of the floating pill (the glass bar itself, before
+/// the SafeArea insets around it). Grows with the text scaler so the
+/// labels never clip.
+double bottomNavContentHeight(BuildContext context) =>
+    64.0 + (MediaQuery.textScalerOf(context).scale(12) - 12).clamp(0.0, 24.0);
+
+/// Total height the floating pill occupies from the bottom of the
+/// screen: 12px SafeArea inset above it + the pill + 12px below it +
+/// the home-indicator inset.
+double bottomNavTotalHeight(BuildContext context) =>
+    12 +
+    bottomNavContentHeight(context) +
+    12 +
+    MediaQuery.paddingOf(context).bottom;
+
+/// Bottom clearance the phone pages' scroll views must reserve so
+/// their last row clears the floating pill, with 16px of air above
+/// it. 0 on wide layouts, where the rail sits on the side and there
+/// is no bottom pill.
+double bottomNavClearance(BuildContext context) {
+  if (MediaQuery.sizeOf(context).width >= kFloatingNavBreakpoint) return 0;
+  return bottomNavTotalHeight(context) + 16;
+}
+
 class LiquidBottomNavigation extends StatefulWidget {
   const LiquidBottomNavigation({
     super.key,
@@ -179,9 +208,7 @@ class _LiquidBottomNavigationState extends State<LiquidBottomNavigation>
     final foreground = highContrast || appearance.glassStyle == GlassStyle.clear
         ? colors.onSurface
         : colors.onSurfaceVariant;
-    final height =
-        64.0 +
-        (MediaQuery.textScalerOf(context).scale(12) - 12).clamp(0.0, 24.0);
+    final height = bottomNavContentHeight(context);
     final preview =
         _dragIndex?.round() ?? _pressedIndex ?? widget.selectedIndex;
     return SafeArea(

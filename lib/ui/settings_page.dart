@@ -12,12 +12,14 @@ library;
 import 'dart:async';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../background/background_support.dart' show AppException;
 import '../core.dart';
 import '../theme/glass.dart';
 import '../theme/palette.dart';
+import '../wenxi_ui/liquid_bottom_navigation.dart';
 import '../wenxi_ui/theme_reveal.dart';
 import 'app_state.dart';
 import 'widgets.dart';
@@ -322,8 +324,18 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) setState(() {});
     } on AppException catch (e) {
       if (mounted) setState(() => _error = e.message);
-    } catch (_) {
-      if (mounted) setState(() => _error = '背景图片处理失败，请换一张重试');
+    } catch (e) {
+      // The import path converts known failures to AppException, so
+      // anything here is unexpected (picker / IO / persist). Log the
+      // full cause for the run log and show the error type, instead
+      // of a generic banner that hides what actually failed.
+      _state.logs.add(LogLevel.warning, '背景图片处理失败：$e');
+      if (mounted) {
+        setState(
+          () => _error =
+              '背景图片处理失败（${e.runtimeType}），请换一张已下载到本机的 JPG/PNG/WebP 图片重试',
+        );
+      }
     }
   }
 
@@ -347,7 +359,14 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            // The floating pill overlays the body: reserve its height
+            // at the bottom so the last slider / save button clears it.
+            padding: EdgeInsets.fromLTRB(
+              16,
+              0,
+              16,
+              24 + bottomNavClearance(context),
+            ),
             children: [
               if (_error != null) ErrorBanner(_error!),
               // Theme (§10.7): instant + persisted.
@@ -365,6 +384,12 @@ class _SettingsPageState extends State<SettingsPage> {
                               : p.name,
                         ),
                         selected: cfg.theme == p.id,
+                        side: BorderSide(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .outlineVariant
+                              .withValues(alpha: .45),
+                        ),
                         selectedColor: p.accent.withValues(alpha: 0.25),
                         onSelected: (_) => unawaited(
                           ThemeRevealHost.change(
@@ -385,6 +410,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     DropdownButtonFormField<GlassLevel>(
                       initialValue: _state.glass.level,
                       isExpanded: true,
+                      icon: Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 20,
+                        color: palette.hint,
+                      ),
                       decoration: const InputDecoration(
                         labelText: '玻璃档位',
                       ),
@@ -445,13 +475,15 @@ class _SettingsPageState extends State<SettingsPage> {
                       _state.background.settings.cardOpacity
                           .toStringAsFixed(2),
                     ),
-                    Slider(
+                    // iOS-style slider: thin track, white thumb. The
+                    // Material Slider's fat thumb + dotted inactive
+                    // track reads Android-ish, especially in dark mode.
+                    CupertinoSlider(
                       value: _state.background.settings.cardOpacity,
                       min: 0.6,
                       max: 1,
                       divisions: 40,
-                      label: _state.background.settings.cardOpacity
-                          .toStringAsFixed(2),
+                      activeColor: palette.accent,
                       onChanged: (v) => unawaited(
                         _state.background.update(cardOpacity: v),
                       ),
@@ -460,12 +492,12 @@ class _SettingsPageState extends State<SettingsPage> {
                       '背景模糊',
                       _state.background.settings.blur.toStringAsFixed(0),
                     ),
-                    Slider(
+                    CupertinoSlider(
                       value: _state.background.settings.blur,
                       min: 0,
                       max: 20,
                       divisions: 20,
-                      label: _state.background.settings.blur.toStringAsFixed(0),
+                      activeColor: palette.accent,
                       onChanged: (v) =>
                           unawaited(_state.background.update(blur: v)),
                     ),
@@ -473,13 +505,12 @@ class _SettingsPageState extends State<SettingsPage> {
                       '背景亮度',
                       _state.background.settings.brightness.toStringAsFixed(2),
                     ),
-                    Slider(
+                    CupertinoSlider(
                       value: _state.background.settings.brightness,
                       min: 0.35,
                       max: 1,
                       divisions: 65,
-                      label: _state.background.settings.brightness
-                          .toStringAsFixed(2),
+                      activeColor: palette.accent,
                       onChanged: (v) =>
                           unawaited(_state.background.update(brightness: v)),
                     ),
@@ -511,6 +542,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     DropdownButtonFormField<int>(
                       initialValue: cfg.memoMode,
+                      icon: Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 20,
+                        color: palette.hint,
+                      ),
                       decoration: const InputDecoration(labelText: '备注检测'),
                       items: [
                         for (var i = 0; i < _memoModeLabels.length; i++)
@@ -787,6 +823,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     DropdownButtonFormField<String>(
                       initialValue: cfg.notifyProvider,
+                      icon: Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 20,
+                        color: palette.hint,
+                      ),
                       decoration: const InputDecoration(labelText: '推送渠道'),
                       items: [
                         for (final entry in _notifyProviderLabels.entries)
