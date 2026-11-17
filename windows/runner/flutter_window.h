@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "win32_window.h"
+#include "tray_icon.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -28,6 +29,11 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // Windows system-tray icon (Dart-driven via the
+  // `com.doimty.dpgrabber/tray` channel). Created after the engine
+  // exists; destroyed before the engine is torn down.
+  std::unique_ptr<TrayIconManager> tray_icon_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

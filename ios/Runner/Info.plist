@@ -26,6 +26,15 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<!-- Silent-audio keep-alive (AudioKeepAlive.swift): the app plays
+		     a loop of digital silence so iOS keeps the process alive in
+		     the background while the Dart ListenEngine polls. iOS may
+		     still suspend/terminate the app; this is a hint, not a
+		     guarantee (unlike Android's foreground service). -->
+		<string>audio</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

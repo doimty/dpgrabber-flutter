@@ -12,5 +12,9 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    // DPGrabber keep-alive: silent-audio loop (AudioKeepAlive) behind
+    // the `com.doimty.dpgrabber/keep_alive` MethodChannel.
+    KeepAlivePlugin.shared.register(
+      with: engineBridge.applicationRegistrar.messenger())
   }
 }

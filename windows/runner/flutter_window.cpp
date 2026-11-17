@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "tray_icon.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -27,6 +28,11 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  // System tray (created after the engine exists so it can use the
+  // engine messenger; destroyed in OnDestroy before the engine goes).
+  tray_icon_ = std::make_unique<TrayIconManager>(
+      GetHandle(), flutter_controller_->engine()->messenger());
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -40,6 +46,10 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // Destroy the tray (unregisters its channel handler + removes the
+  // icon) while the engine messenger is still alive.
+  tray_icon_.reset();
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -64,6 +74,32 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   switch (message) {
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
+      break;
+
+    case TrayIconManager::kTrayMessage:
+      if (tray_icon_) {
+        tray_icon_->OnTrayMessage(wparam, lparam);
+      }
+      return 0;
+
+    case WM_COMMAND:
+      // Tray popup-menu commands only (menu items have HIWORD == 0).
+      if (tray_icon_ && HIWORD(wparam) == 0 &&
+          (LOWORD(wparam) == TrayIconManager::kMenuShow ||
+           LOWORD(wparam) == TrayIconManager::kMenuQuit)) {
+        tray_icon_->OnMenuCommand(LOWORD(wparam));
+        return 0;
+      }
+      break;
+
+    case WM_CLOSE:
+      // Close button hides to the tray while listening is active;
+      // a real exit (tray menu "退出" -> Dart -> `quit`) closes normally.
+      if (tray_icon_ && tray_icon_->IsActive() &&
+          !tray_icon_->IsQuitting()) {
+        tray_icon_->HideWindow();
+        return 0;
+      }
       break;
   }
 
