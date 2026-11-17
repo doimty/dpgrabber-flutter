@@ -208,7 +208,7 @@ void main() {
       expect(find.text('清空历史'), findsOneWidget);
       await tester.tap(find.text('设置'));
       await tester.pumpAndSettle();
-      expect(find.text('主题'), findsWidgets);
+      expect(find.text('接单条件'), findsWidgets);
       expect(find.text('保存设置'), findsWidgets);
     });
   });
@@ -232,23 +232,68 @@ void main() {
   });
 
   group('settings page', () {
-    testWidgets('theme switch applies immediately', (tester) async {
+    testWidgets('theme/glass/background customization is gone',
+        (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
       await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
       await tester.pumpAndSettle();
-      expect(find.text('绯樱春信（定稿）'), findsOneWidget);
-      await tester.tap(find.text('绯樱春信（定稿）'));
-      await tester.pumpAndSettle();
-      expect(state.theme.value, 'sakura');
-      expect(state.config.theme, 'sakura');
+      // The three removed sections must not appear anywhere. They sat
+      // at the top of the page, so they would be built on first pump
+      // if they still existed.
+      expect(find.text('主题'), findsNothing);
+      expect(find.text('玻璃效果'), findsNothing);
+      expect(find.text('背景'), findsNothing);
+      expect(find.text('选择图片'), findsNothing);
+      expect(find.text('玻璃档位'), findsNothing);
+      expect(find.text('低功耗模式'), findsNothing);
+      // The remaining sections are intact, in order. The ListView
+      // builds lazily, so scroll each title into view before asserting.
+      // (scrollUntilVisible can't be used here: its default Scrollable
+      // finder matches the page's multiline TextFields too, and a
+      // ListView is not itself a Scrollable.)
+      Future<void> scrollTo(Finder target) async {
+        for (var i = 0; i < 30; i++) {
+          if (target.evaluate().isNotEmpty) {
+            await tester.ensureVisible(target.first);
+            await tester.pumpAndSettle();
+            return;
+          }
+          await tester.drag(find.byType(ListView), const Offset(0, -400));
+          await tester.pumpAndSettle();
+        }
+        fail('never scrolled to $target');
+      }
+
+      for (final title in [
+        '接单条件',
+        '确认等待',
+        '刷新与休息',
+        '高级设置',
+        '接单类型匹配词',
+        '抢单推送',
+        'AES 密钥（十六进制）',
+      ]) {
+        await scrollTo(find.text(title));
+        expect(find.text(title), findsOneWidget);
+      }
+      await scrollTo(find.text('保存设置'));
+      expect(find.text('保存设置'), findsWidgets);
+      expect(find.text('保存设置'), findsWidgets);
+      // Stored values are untouched: the fixed theme/glass/background
+      // still come from the saved config, not from any UI.
+      expect(state.config.theme, 'day');
+      expect(state.glass.level, GlassLevel.clear);
+      expect(state.background.settings.cardOpacity, 0.86);
+      expect(state.background.settings.blur, 6.0);
+      expect(state.background.settings.brightness, 0.90);
     });
 
     testWidgets('invalid number is rejected on save', (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
       // Enlarge the viewport so the lazily-built order-condition card
-      // (below the theme and background sections) is built and visible.
+      // (below the top of the page) is built and visible.
       tester.view.physicalSize = const Size(800, 2400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);

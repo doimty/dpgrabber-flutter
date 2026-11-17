@@ -2,25 +2,21 @@
 ///
 /// All config items (§2): order conditions, confirm wait, run/rest,
 /// shop/timeout/dedup, push, voice, rotation, TLS, AES keys, item
-/// name map, blacklist + memo keywords (advanced), theme picker.
-/// Theme switching is instant and persisted (§9); other edits apply
-/// on "保存设置" (validated via [AppConfig.fromJson] — invalid values
+/// name map, blacklist + memo keywords (advanced).
+/// Theme / glass level / wallpaper are FIXED values (§9) and are not
+/// editable here — the user asked for all theme customization to be
+/// removed, keeping only her current settings. Other edits apply on
+/// "保存设置" (validated via [AppConfig.fromJson] — invalid values
 /// are rejected with the config error, never silently clamped).
-/// `auto_stop_after_grab` and the theme apply immediately (§10.3).
+/// `auto_stop_after_grab` applies immediately (§10.3).
 library;
 
 import 'dart:async';
 
-import 'package:file_selector/file_selector.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
-import '../background/background_support.dart' show AppException;
 import '../core.dart';
-import '../theme/glass.dart';
-import '../theme/palette.dart';
 import '../wenxi_ui/liquid_bottom_navigation.dart';
-import '../wenxi_ui/theme_reveal.dart';
 import 'app_state.dart';
 import 'widgets.dart';
 
@@ -265,80 +261,6 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _backgroundRow(BuildContext context, {required bool dark}) {
-    final palette = _state.theme.palette;
-    final settings = _state.background.settings;
-    final picture = dark ? settings.night : settings.day;
-    return Row(
-      children: [
-        Text(dark ? '夜间背景' : '白天背景', style: TextStyle(color: palette.textDark)),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            picture == null
-                ? '未设置（使用主题底色）'
-                : '已设置（${picture.width}×${picture.height}）',
-            style: TextStyle(color: palette.hint, fontSize: 13),
-          ),
-        ),
-        TextButton(
-          onPressed: () => unawaited(_pickBackground(dark)),
-          child: const Text('选择图片'),
-        ),
-        if (picture != null)
-          TextButton(
-            onPressed: () => unawaited(_state.background.clearPicture(dark: dark)),
-            child: const Text('清除'),
-          ),
-      ],
-    );
-  }
-
-  Widget _backgroundParam(String label, String value) {
-    final palette = _state.theme.palette;
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: TextStyle(color: palette.textDark, fontSize: 13)),
-          Text(value, style: TextStyle(color: palette.hint, fontSize: 13)),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _pickBackground(bool dark) async {
-    try {
-      final file = await openFile(
-        acceptedTypeGroups: [
-          const XTypeGroup(
-            label: '图片',
-            extensions: ['png', 'jpg', 'jpeg', 'webp'],
-          ),
-        ],
-      );
-      if (file == null) return;
-      await _state.background.importImage(file, dark: dark);
-      _state.logs.add(LogLevel.info, dark ? '已设置夜间背景' : '已设置白天背景');
-      if (mounted) setState(() {});
-    } on AppException catch (e) {
-      if (mounted) setState(() => _error = e.message);
-    } catch (e) {
-      // The import path converts known failures to AppException, so
-      // anything here is unexpected (picker / IO / persist). Log the
-      // full cause for the run log and show the error type, instead
-      // of a generic banner that hides what actually failed.
-      _state.logs.add(LogLevel.warning, '背景图片处理失败：$e');
-      if (mounted) {
-        setState(
-          () => _error =
-              '背景图片处理失败（${e.runtimeType}），请换一张已下载到本机的 JPG/PNG/WebP 图片重试',
-        );
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final palette = _state.theme.palette;
@@ -369,154 +291,6 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             children: [
               if (_error != null) ErrorBanner(_error!),
-              // Theme (§10.7): instant + persisted.
-              const SectionTitle('主题'),
-              AppCard(
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final p in allPalettes)
-                      ChoiceChip(
-                        label: Text(
-                          p.id == recommendedThemeId
-                              ? '${p.name}（定稿）'
-                              : p.name,
-                        ),
-                        selected: cfg.theme == p.id,
-                        side: BorderSide(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .outlineVariant
-                              .withValues(alpha: .45),
-                        ),
-                        selectedColor: p.accent.withValues(alpha: 0.25),
-                        onSelected: (_) => unawaited(
-                          ThemeRevealHost.change(
-                            context,
-                            dark: p.isDark,
-                            update: () => _state.setTheme(p.id),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              // Glass (§9 design ref): level + low power.
-              const SectionTitle('玻璃效果'),
-              AppCard(
-                child: Column(
-                  children: [
-                    DropdownButtonFormField<GlassLevel>(
-                      initialValue: _state.glass.level,
-                      isExpanded: true,
-                      icon: Icon(
-                        Icons.keyboard_arrow_down_rounded,
-                        size: 20,
-                        color: palette.hint,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: '玻璃档位',
-                      ),
-                      items: const [
-                        DropdownMenuItem(
-                          value: GlassLevel.clear,
-                          child: Text(
-                            '通透（不透明度 .40 / 模糊 8）',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        DropdownMenuItem(
-                          value: GlassLevel.frosted,
-                          child: Text(
-                            '磨砂（不透明度 .93 / 模糊 18）',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        DropdownMenuItem(
-                          value: GlassLevel.solid,
-                          child: Text(
-                            '实色（不透明度 1 / 无模糊）',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                      onChanged: (v) {
-                        if (v != null) {
-                          _state.glass.setLevel(v);
-                          setState(() {});
-                        }
-                      },
-                    ),
-                    SwitchRow(
-                      label: '低功耗模式',
-                      subtitle: '关闭模糊效果',
-                      value: _state.glass.lowPower,
-                      onChanged: (v) {
-                        _state.glass.setLowPower(v);
-                        setState(() {});
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              // Background wallpaper (wenxi background system).
-              const SectionTitle('背景'),
-              AppCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _backgroundRow(context, dark: false),
-                    const SizedBox(height: 4),
-                    _backgroundRow(context, dark: true),
-                    const SizedBox(height: 12),
-                    _backgroundParam(
-                      '卡片不透明度',
-                      _state.background.settings.cardOpacity
-                          .toStringAsFixed(2),
-                    ),
-                    // iOS-style slider: thin track, white thumb. The
-                    // Material Slider's fat thumb + dotted inactive
-                    // track reads Android-ish, especially in dark mode.
-                    CupertinoSlider(
-                      value: _state.background.settings.cardOpacity,
-                      min: 0.6,
-                      max: 1,
-                      divisions: 40,
-                      activeColor: palette.accent,
-                      onChanged: (v) => unawaited(
-                        _state.background.update(cardOpacity: v),
-                      ),
-                    ),
-                    _backgroundParam(
-                      '背景模糊',
-                      _state.background.settings.blur.toStringAsFixed(0),
-                    ),
-                    CupertinoSlider(
-                      value: _state.background.settings.blur,
-                      min: 0,
-                      max: 20,
-                      divisions: 20,
-                      activeColor: palette.accent,
-                      onChanged: (v) =>
-                          unawaited(_state.background.update(blur: v)),
-                    ),
-                    _backgroundParam(
-                      '背景亮度',
-                      _state.background.settings.brightness.toStringAsFixed(2),
-                    ),
-                    CupertinoSlider(
-                      value: _state.background.settings.brightness,
-                      min: 0.35,
-                      max: 1,
-                      divisions: 65,
-                      activeColor: palette.accent,
-                      onChanged: (v) =>
-                          unawaited(_state.background.update(brightness: v)),
-                    ),
-                  ],
-                ),
-              ),
               // Order conditions (§10.4).
               const SectionTitle('接单条件'),
               AppCard(
