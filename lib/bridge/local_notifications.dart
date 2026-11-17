@@ -14,6 +14,11 @@
 /// - iOS: `UNUserNotificationCenter` via the plugin; alert + sound, no
 ///   badge (the grab count is shown in-app).
 ///
+/// - Windows: `WindowsInitializationSettings` (appName / appUserModelId /
+///   stable guid) is REQUIRED — without it the plugin throws
+///   `Invalid argument(s): Windows settings must be set...` at startup
+///   and the app dies before the first frame.
+///
 /// [LocalNotificationBackend] is injectable so unit tests can run
 /// without the platform plugin. [onGrabHandler] is a
 /// `ListenEngine.onGrab`-shaped closure: wire it as the engine's
@@ -59,6 +64,14 @@ class FlutterLocalNotificationsBackend
           requestAlertPermission: false,
           requestSoundPermission: false,
           requestBadgePermission: false,
+        ),
+        windows: WindowsInitializationSettings(
+          appName: 'DPGrabber',
+          appUserModelId: 'com.doimty.dpgrabber',
+          // Stable GUID: Windows routes toast activation through it.
+          // Do not change it — a new guid would orphan notifications
+          // shown by earlier builds.
+          guid: '2eecfb1d-433e-4dc6-9f4c-509ee8048c33',
         ),
       ),
     );

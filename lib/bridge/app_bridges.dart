@@ -48,7 +48,15 @@ class AppBridges {
     final keepAlive = KeepAlive(channel: keepAliveChannel);
     final notifications =
         LocalNotifications(backend: notificationBackend);
-    await notifications.initialize();
+    // Notification init is best-effort: a failure here must never kill
+    // startup (see the Windows-settings crash: the plugin throws when a
+    // platform's settings are missing). Notifications stay unavailable;
+    // listening and grabs still work.
+    try {
+      await notifications.initialize();
+    } catch (_) {
+      // Best-effort only; show() already degrades to false.
+    }
     final tray = WindowsTray(backend: trayBackend);
     return AppBridges(
       credentialStore: store,
