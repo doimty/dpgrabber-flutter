@@ -34,7 +34,20 @@ class Clerk {
   final int id;
   final int? shopId;
   final String? name;
-  const Clerk({required this.id, this.shopId, this.name});
+
+  /// Platform online state from `clerk/get`: 1 online, 2 offline
+  /// (DPPP `_fetch_clerk_state` reads the same field).
+  final int? status;
+
+  /// Avatar URL from `clerk/get` (DPPP `_fetch_avatar` source).
+  final String? avatarUrl;
+  const Clerk({
+    required this.id,
+    this.shopId,
+    this.name,
+    this.status,
+    this.avatarUrl,
+  });
 
   factory Clerk.fromMap(Map<String, dynamic> map) {
     int id = 0;
@@ -51,11 +64,21 @@ class Clerk {
     } else if (rawShop is String) {
       shopId = int.tryParse(rawShop.trim());
     }
+    int? status;
+    final rawStatus = map['status'];
+    if (rawStatus is num) {
+      status = rawStatus.toInt();
+    } else if (rawStatus is String) {
+      status = int.tryParse(rawStatus.trim());
+    }
     final rawName = map['name'];
+    final rawAvatar = map['avatarUrl'];
     return Clerk(
       id: id,
       shopId: shopId,
       name: rawName?.toString(),
+      status: status,
+      avatarUrl: rawAvatar?.toString(),
     );
   }
 
@@ -63,6 +86,8 @@ class Clerk {
         'id': id,
         if (shopId != null) 'shopId': shopId,
         if (name != null) 'name': name,
+        if (status != null) 'status': status,
+        if (avatarUrl != null) 'avatarUrl': avatarUrl,
       };
 }
 

@@ -11,6 +11,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -166,11 +167,17 @@ class _ListenPageState extends State<ListenPage> {
                     CircleAvatar(
                       backgroundColor: palette.accent,
                       foregroundColor: Colors.white,
-                      child: Text(
-                        _clerkDisplayName.isEmpty
-                            ? '多'
-                            : _clerkDisplayName.characters.first.toUpperCase(),
-                      ),
+                      backgroundImage: _state.avatarPath.isNotEmpty
+                          ? FileImage(File(_state.avatarPath))
+                          : null,
+                      child: _state.avatarPath.isEmpty
+                          ? Text(
+                              _clerkDisplayName.isEmpty
+                                  ? '多'
+                                  : _clerkDisplayName.characters.first
+                                      .toUpperCase(),
+                            )
+                          : null,
                     ),
                     const SizedBox(width: 12),
                     Expanded(

@@ -19,7 +19,8 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
+import 'dart:io' hide BytesBuilder;
+import 'dart:typed_data' show BytesBuilder;
 
 import 'package:flutter/foundation.dart';
 
@@ -68,6 +69,9 @@ class AppState extends ChangeNotifier {
   String? loginPhone;
   String? _password; // in-memory only, never persisted by this class
   bool online = false;
+
+  /// Cached clerk avatar file path (empty = show the letter fallback).
+  String avatarPath = '';
   bool listening = false;
   String? lastError;
 
@@ -270,11 +274,55 @@ class AppState extends ChangeNotifier {
     return s;
   }
 
+  /// Download and cache the clerk avatar (DPPP `_fetch_avatar`):
+  /// source `clerk.avatarUrl`, cached at `<appDir>/avatars/avatar_<id>.png`.
+  /// Cosmetic only — never breaks login or listening.
+  Future<void> _refreshAvatar(Clerk clerk) async {
+    final url = clerk.avatarUrl ?? '';
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return;
+    try {
+      final dir = Directory('${appDir.path}/avatars');
+      await dir.create(recursive: true);
+      final file = File('${dir.path}/avatar_${clerk.id}.png');
+      if (!await file.exists() || await file.length() < 512) {
+        final http = HttpClient();
+        http.connectionTimeout = const Duration(seconds: 15);
+        try {
+          final req = await http.getUrl(Uri.parse(url));
+          final resp =
+              await req.close().timeout(const Duration(seconds: 15));
+          final builder = BytesBuilder();
+          await for (final chunk in resp) {
+            builder.add(chunk);
+          }
+          final bytes = builder.takeBytes();
+          if (bytes.length > 512) {
+            await file.writeAsBytes(bytes, flush: true);
+          }
+        } finally {
+          http.close(force: true);
+        }
+      }
+      if (await file.exists() && await file.length() > 512) {
+        avatarPath = file.path;
+        notifyListeners();
+      }
+    } catch (_) {
+      // Avatar is cosmetic; ignore any failure.
+    }
+  }
+
   Future<void> _refreshClerkAndSwitches() async {
     try {
       final raw = await client.clerkGet(session: session);
       clerk = extractClerk(raw);
+      // Sync the real online state from the platform (1 online /
+      // 2 offline), exactly like DPPP's _fetch_clerk_state ->
+      // _set_online_text(status == 1). Without this the switch always
+      // showed "当前离线" after login regardless of the real state.
+      online = (clerk?.status ?? 0) == 1;
       if (clerk != null && clerk!.id > 0) {
+        unawaited(_refreshAvatar(clerk!));
         config = config.copyWith(clerkName: clerk!.name ?? config.clerkName);
         await saveConfig();
       }
