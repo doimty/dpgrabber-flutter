@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import '../core.dart';
 import '../theme/app_theme.dart';
 import '../theme/palette.dart';
+import '../wenxi_ui/liquid_glass.dart';
 import 'app_state.dart';
 import 'log_store.dart';
 import 'widgets.dart';
@@ -205,16 +206,35 @@ class _ListenPageState extends State<ListenPage> {
                 ),
               ),
               const SizedBox(height: 12),
-              // Start / stop.
+              // Start / stop — wenxi liquid glass button.
               Row(
                 children: [
                   Expanded(
-                    child: ElevatedButton.icon(
+                    child: LiquidGlassButton(
                       onPressed: _toggleListening,
-                      icon: Icon(
-                        _state.listening ? Icons.stop : Icons.play_arrow,
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 14,
+                        ),
                       ),
-                      label: Text(_state.listening ? '停止监听' : '开始监听'),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _state.listening
+                                ? Icons.stop
+                                : Icons.play_arrow,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _state.listening ? '停止监听' : '开始监听',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],

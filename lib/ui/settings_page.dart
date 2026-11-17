@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 import '../core.dart';
 import '../theme/glass.dart';
 import '../theme/palette.dart';
+import '../wenxi_ui/theme_reveal.dart';
 import 'app_state.dart';
 import 'widgets.dart';
 
@@ -299,7 +300,13 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                         selected: cfg.theme == p.id,
                         selectedColor: p.accent.withValues(alpha: 0.25),
-                        onSelected: (_) => unawaited(_state.setTheme(p.id)),
+                        onSelected: (_) => unawaited(
+                          ThemeRevealHost.change(
+                            context,
+                            dark: p.isDark,
+                            update: () => _state.setTheme(p.id),
+                          ),
+                        ),
                       ),
                   ],
                 ),
