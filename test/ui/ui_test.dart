@@ -1,5 +1,6 @@
-/// UI tests: theme palettes, log store, login validation, navigation,
-/// settings presence. Core tests live in test/core/ and are untouched.
+/// UI tests: theme palettes, log store, settings account login
+/// validation, navigation, settings presence. Core tests live in
+/// test/core/ and are untouched.
 library;
 
 import 'dart:io';
@@ -13,7 +14,6 @@ import 'package:dpgrabber/ui/app_state.dart';
 import 'package:dpgrabber/ui/history_page.dart';
 import 'package:dpgrabber/ui/listen_page.dart';
 import 'package:dpgrabber/ui/log_store.dart';
-import 'package:dpgrabber/ui/login_page.dart';
 import 'package:dpgrabber/ui/navigation.dart';
 import 'package:dpgrabber/ui/settings_page.dart';
 import 'package:flutter/material.dart';
@@ -132,13 +132,13 @@ void main() {
     });
   });
 
-  group('login page', () {
+  group('settings account section (§10.2)', () {
     testWidgets('empty phone/password shows validation', (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
-      await tester.pumpWidget(_wrap(state, LoginPage(state: state)));
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
       await tester.pumpAndSettle();
-      expect(find.text('手机号'), findsWidgets);
+      expect(find.text('账号'), findsOneWidget);
       expect(find.text('登录验证'), findsOneWidget);
       await tester.tap(find.text('登录验证'));
       await tester.pump();
@@ -148,7 +148,7 @@ void main() {
     testWidgets('short phone shows 11-digit validation', (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
-      await tester.pumpWidget(_wrap(state, LoginPage(state: state)));
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
       await tester.pumpAndSettle();
       await tester.enterText(
         find.widgetWithText(TextField, '11 位手机号').first,
@@ -166,12 +166,33 @@ void main() {
     testWidgets('unencrypted-storage warning is shown', (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
-      await tester.pumpWidget(_wrap(state, LoginPage(state: state)));
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
       await tester.pumpAndSettle();
       expect(
         find.text(FileCredentialStore.unencryptedWarning),
         findsOneWidget,
       );
+    });
+
+    testWidgets('logged-in account display + logout', (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      state.loggedIn = true;
+      state.loginPhone = '13800000000';
+      state.clerk = const Clerk(id: 230313, name: '加冰', status: 1);
+      state.session = const Session(token: 'fake', sid: '92');
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      expect(find.text('加冰'), findsOneWidget);
+      expect(find.text('138****0000'), findsOneWidget);
+      expect(find.text('店铺 92'), findsOneWidget);
+      expect(find.text('ID：230313'), findsOneWidget);
+      expect(find.text('登录验证'), findsNothing);
+      await tester.tap(find.text('退出登录'));
+      await tester.pumpAndSettle();
+      expect(state.loggedIn, isFalse);
+      expect(state.session, isNull);
+      expect(find.text('登录验证'), findsOneWidget);
     });
   });
 
@@ -208,6 +229,7 @@ void main() {
       expect(find.text('清空历史'), findsOneWidget);
       await tester.tap(find.text('设置'));
       await tester.pumpAndSettle();
+      expect(find.text('账号'), findsOneWidget);
       expect(find.text('接单条件'), findsWidgets);
       expect(find.text('保存设置'), findsWidgets);
     });
@@ -266,6 +288,7 @@ void main() {
       }
 
       for (final title in [
+        '账号',
         '接单条件',
         '确认等待',
         '刷新与休息',
@@ -323,12 +346,14 @@ void main() {
     });
   });
 
-  testWidgets('DpgApp boots to the login page when logged out',
+  testWidgets('DpgApp boots to the shell when logged out',
       (tester) async {
     final state = await _testStateWith(tester);
     addTearDown(state.dispose);
     await tester.pumpWidget(DpgApp(state: state));
     await tester.pumpAndSettle();
-    expect(find.text('登录验证'), findsOneWidget);
+    // The listen page is the entry tab — no blocking login screen.
+    expect(find.text('开始监听'), findsOneWidget);
+    expect(find.text('登录验证'), findsNothing);
   });
 }

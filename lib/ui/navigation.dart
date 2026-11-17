@@ -1,8 +1,9 @@
 /// Navigation shell: one set of three destinations — 监听 (dashboard),
 /// 历史, 设置 — rendered with the wenxi navigation system: an 88px
 /// glass side rail on wide screens (desktop) and the liquid bottom bar
-/// (spring lens + refraction) on phones. The login page stands alone
-/// outside this shell (see main.dart).
+/// (spring lens + refraction) on phones. Login lives in the Settings
+/// "账号" section (§10.2); there is no standalone login page — the
+/// shell is always shown after init.
 library;
 
 import 'package:flutter/material.dart';

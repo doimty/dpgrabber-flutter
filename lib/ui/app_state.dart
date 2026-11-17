@@ -394,6 +394,25 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Log out of the current session (§10.2): stops listening and
+  /// clears the in-memory session only. Saved credentials + the
+  /// per-account config are kept, so one-tap re-login from the saved
+  /// list still works. Note: restarting the app restores the saved
+  /// account (init() auto-restores it, as before) — use
+  /// [clearAccount] to remove the account entirely.
+  void logout() {
+    stopListening();
+    session = null;
+    clerk = null;
+    _password = null;
+    loginPhone = null;
+    loggedIn = false;
+    avatarPath = '';
+    online = false;
+    lastError = null;
+    notifyListeners();
+  }
+
   /// Clear the saved account (§10.2): deletes credentials + the
   /// per-account config file, stops listening, returns to login.
   Future<void> clearAccount() async {
@@ -419,8 +438,8 @@ class AppState extends ChangeNotifier {
   Future<bool> startListening() async {
     if (engine == null) return false;
     if (currentPhone.isEmpty || _password == null || _password!.isEmpty) {
-      lastError = '请先登录并保存账号';
-      logs.add(LogLevel.error, '启动失败：请先登录并保存账号');
+      lastError = '请先去设置页登录账号';
+      logs.add(LogLevel.error, '启动失败：请先去设置页登录账号');
       notifyListeners();
       return false;
     }

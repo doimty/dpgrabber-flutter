@@ -1,5 +1,11 @@
-/// Settings page (PORTING_CONTRACT §10.4/§10.5/§10.7).
+/// Settings page (PORTING_CONTRACT §10.2/§10.4/§10.5/§10.7).
 ///
+/// Login lives here, in the first "账号" section (§10.2): there is no
+/// standalone login page — the app always boots to the shell, and an
+/// unlogged-in user logs in from Settings, like the original panel's
+/// "账号与店铺" section (phone + password, saved accounts, clear with
+/// confirmation). Logout clears only the in-memory session; the saved
+/// account stays for one-tap re-login.
 /// All config items (§2): order conditions, confirm wait, run/rest,
 /// shop/timeout/dedup, push, voice, rotation, TLS, AES keys, item
 /// name map, blacklist + memo keywords (advanced).
@@ -12,11 +18,14 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core.dart';
 import '../wenxi_ui/liquid_bottom_navigation.dart';
+import '../wenxi_ui/liquid_glass.dart';
 import 'app_state.dart';
 import 'widgets.dart';
 
@@ -45,6 +54,11 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   late final Map<String, TextEditingController> _c;
+  late final TextEditingController _phoneController;
+  late final TextEditingController _passwordController;
+  bool _showPassword = false;
+  bool _loggingIn = false;
+  String? _loginError;
   String? _error;
   String? _pushTestResult;
 
@@ -119,6 +133,8 @@ class _SettingsPageState extends State<SettingsPage> {
       'item_always_types':
           TextEditingController(text: cfg.itemAlwaysTypes.join('，')),
     };
+    _phoneController = TextEditingController(text: cfg.phone);
+    _passwordController = TextEditingController();
   }
 
   static String _num(double v) =>
@@ -129,7 +145,102 @@ class _SettingsPageState extends State<SettingsPage> {
     for (final c in _c.values) {
       c.dispose();
     }
+    _phoneController.dispose();
+    _passwordController.dispose();
     super.dispose();
+  }
+
+  String get _clerkDisplayName {
+    final name = _state.clerk?.name ?? _state.config.clerkName;
+    return name.isEmpty ? '未获取店员信息' : name;
+  }
+
+  // -- account (§10.2: login lives in Settings) ----------------------
+
+  String? _validateLogin() {
+    final phone = _phoneController.text.trim();
+    final password = _passwordController.text;
+    if (phone.isEmpty) return '请输入手机号';
+    if (password.isEmpty) return '请输入密码';
+    final digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length != 11) return '手机号应为 11 位数字';
+    return null;
+  }
+
+  Future<void> _login() async {
+    final problem = _validateLogin();
+    if (problem != null) {
+      setState(() => _loginError = problem);
+      return;
+    }
+    setState(() {
+      _loggingIn = true;
+      _loginError = null;
+    });
+    try {
+      await _state.login(
+        _phoneController.text.trim(),
+        _passwordController.text,
+      );
+      _passwordController.clear();
+    } on ApiError catch (e) {
+      setState(() => _loginError = '登录失败：${e.message}');
+    } catch (e) {
+      setState(() => _loginError = '登录失败：$e');
+    } finally {
+      if (mounted) setState(() => _loggingIn = false);
+    }
+  }
+
+  Future<void> _switchTo(String phone) async {
+    setState(() {
+      _loggingIn = true;
+      _loginError = null;
+    });
+    final ok = await _state.switchAccount(phone);
+    if (mounted) {
+      setState(() {
+        _loggingIn = false;
+        if (!ok) _loginError = _state.lastError ?? '切换账号失败';
+      });
+    }
+  }
+
+  Future<void> _clearSaved() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        final palette = _state.theme.palette;
+        return AlertDialog(
+          title: const Text('清除已保存账号'),
+          content: const Text('将删除已保存的手机号和密码。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text('取消', style: TextStyle(color: palette.accent)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text('清除', style: TextStyle(color: palette.logError)),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed == true) {
+      await _state.clearAccount();
+      if (mounted) {
+        _phoneController.clear();
+        _passwordController.clear();
+        setState(() {});
+      }
+    }
+  }
+
+  void _logout() {
+    _state.logout();
+    _passwordController.clear();
+    setState(() {});
   }
 
   List<String> _lines(String key) => _c[key]!
@@ -291,6 +402,206 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             children: [
               if (_error != null) ErrorBanner(_error!),
+              // Account (§10.2): login lives here — the app never
+              // blocks on a standalone login page.
+              const SectionTitle('账号'),
+              if (_loginError != null) ErrorBanner(_loginError!),
+              if (_state.loggedIn)
+                AppCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            backgroundColor: palette.accent,
+                            foregroundColor: Colors.white,
+                            backgroundImage: _state.avatarPath.isNotEmpty
+                                ? FileImage(File(_state.avatarPath))
+                                : null,
+                            child: _state.avatarPath.isEmpty
+                                ? Text(
+                                    _clerkDisplayName.isEmpty
+                                        ? '多'
+                                        : _clerkDisplayName.characters.first
+                                              .toUpperCase(),
+                                  )
+                                : null,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _clerkDisplayName,
+                                  style: TextStyle(
+                                    color: palette.textDark,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                Text(
+                                  _state.currentPhone.isEmpty
+                                      ? '未登录'
+                                      : maskPhone(_state.currentPhone),
+                                  style: TextStyle(
+                                    color: palette.hint,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                if (_state.session != null)
+                                  Text(
+                                    '店铺 ${_state.session!.sid}',
+                                    style: TextStyle(
+                                      color: palette.hint,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                if (_state.clerk != null &&
+                                    _state.clerk!.id > 0)
+                                  Text(
+                                    'ID：${_state.clerk!.id}',
+                                    style: TextStyle(
+                                      color: palette.hint,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: OutlinedButton(
+                          onPressed: _logout,
+                          child: Text(
+                            '退出登录',
+                            style: TextStyle(color: palette.logError),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                AppCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (!_state.hasSecureStorage)
+                        ErrorBanner(
+                          FileCredentialStore.unencryptedWarning,
+                        ),
+                      Text(
+                        _state.config.phone.isEmpty
+                            ? '还没有账号配置，登录后会自动建档'
+                            : '将登录 ${maskPhone(_state.config.phone)}',
+                        style: TextStyle(
+                          color: palette.hint,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      LabeledField(
+                        label: '手机号',
+                        controller: _phoneController,
+                        hint: '11 位手机号',
+                        keyboardType: TextInputType.phone,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(11),
+                        ],
+                      ),
+                      LabeledField(
+                        label: '密码',
+                        controller: _passwordController,
+                        hint: '账号密码',
+                        obscureText: !_showPassword,
+                        suffixIcon: IconButton(
+                          tooltip: _showPassword ? '隐藏密码' : '显示密码',
+                          onPressed: () => setState(
+                            () => _showPassword = !_showPassword,
+                          ),
+                          icon: Icon(
+                            _showPassword
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            color: palette.hint,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      LiquidGlassButton(
+                        onPressed: _loggingIn ? null : _login,
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 14,
+                          ),
+                        ),
+                        child: _loggingIn
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Text(
+                                '登录验证',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _loggingIn ? '正在登录…' : '请输入手机号和密码后登录',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: palette.hint,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (_state.savedAccounts.isNotEmpty) ...[
+                const SectionTitle('已保存账号'),
+                AppCard(
+                  child: Column(
+                    children: [
+                      for (final account in _state.savedAccounts)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            AccountStore.labelFor(account),
+                            style: TextStyle(color: palette.textDark),
+                          ),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: _loggingIn
+                              ? null
+                              : () => _switchTo(
+                                    (account['phone'] ?? '').toString(),
+                                  ),
+                        ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: _clearSaved,
+                          child: Text(
+                            '清除已保存账号',
+                            style: TextStyle(color: palette.logError),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               // Order conditions (§10.4).
               const SectionTitle('接单条件'),
               AppCard(

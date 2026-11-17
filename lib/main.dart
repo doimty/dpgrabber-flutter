@@ -1,9 +1,11 @@
 /// DPGrabber Flutter entry point.
 ///
-/// Startup: read the config + saved account -> not logged in shows the
-/// login page, logged in shows the main shell (listen / history /
-/// settings). The listen engine, history store, notifier and theme are
-/// all wired in [AppState]; this file only bootstraps it.
+/// Startup: read the config + saved account -> the main shell (listen
+/// / history / settings). There is no standalone login page: login
+/// lives in the Settings "账号" section (§10.2), so an unlogged-in
+/// user can always see the app and log in from there. The listen
+/// engine, history store, notifier and theme are all wired in
+/// [AppState]; this file only bootstraps it.
 ///
 /// Bridge wiring: keep-alive / secure storage / tray / local
 /// notifications come from `lib/bridge/` ([AppBridges]). Credentials
@@ -23,7 +25,6 @@ import 'background/app_background.dart';
 import 'bridge/bridge.dart';
 import 'theme/glass.dart' show GlassLevel;
 import 'ui/app_state.dart';
-import 'ui/login_page.dart';
 import 'ui/navigation.dart';
 import 'wenxi_ui/app_text_scale.dart';
 import 'wenxi_ui/app_theme.dart';
@@ -103,9 +104,6 @@ class DpgApp extends StatelessWidget {
                     ),
                   ),
                 );
-              }
-              if (!state.loggedIn) {
-                return LoginPage(state: state);
               }
               return AppShell(state: state);
             },

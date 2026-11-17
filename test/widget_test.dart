@@ -1,6 +1,7 @@
-// Smoke test: the app boots to the login page when logged out.
-// (The old counter demo this file tested was removed with the real
-// entry point in lib/main.dart; see test/ui/ui_test.dart.)
+// Smoke test: the app boots to the shell when logged out — login
+// lives in the Settings "账号" section (§10.2), never a blocking
+// screen. (The old counter demo this file tested was removed with the
+// real entry point in lib/main.dart; see test/ui/ui_test.dart.)
 library;
 
 import 'dart:io';
@@ -10,7 +11,7 @@ import 'package:dpgrabber/ui/app_state.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('App boots to login when logged out', (tester) async {
+  testWidgets('App boots to the shell when logged out', (tester) async {
     final state = (await tester.runAsync(() async {
       final dir = await Directory.systemTemp.createTemp('dpgrabber_smoke_');
       final state = AppState(appDir: dir);
@@ -20,6 +21,7 @@ void main() {
     addTearDown(state.dispose);
     await tester.pumpWidget(DpgApp(state: state));
     await tester.pumpAndSettle();
-    expect(find.text('登录验证'), findsOneWidget);
+    expect(find.text('开始监听'), findsOneWidget);
+    expect(find.text('登录验证'), findsNothing);
   });
 }
