@@ -5,6 +5,10 @@
 /// - frosted: opacity .92–.94, blur 18
 /// - solid:   opacity 1.0, blur 0
 /// Plus a low-power switch that turns blur off everywhere.
+///
+/// The default level is clear (the reference default): at frosted
+/// the surfaces are nearly opaque and the glass barely reads as
+/// glass.
 library;
 
 import 'dart:ui';
@@ -37,7 +41,7 @@ class GlassSettings extends ChangeNotifier {
   GlassLevel level;
   bool lowPower;
 
-  GlassSettings({this.level = GlassLevel.frosted, this.lowPower = false});
+  GlassSettings({this.level = GlassLevel.clear, this.lowPower = false});
 
   double get effectiveBlur =>
       (lowPower || level == GlassLevel.solid) ? 0 : level.blur;
@@ -87,7 +91,8 @@ class GlassBox extends StatelessWidget {
     final decoration = BoxDecoration(
       color: fill,
       borderRadius: BorderRadius.circular(radius),
-      border: Border.all(color: palette.cardBorder),
+      // Hairline border (design reference: .6–.7), not a 1px rule.
+      border: Border.all(color: palette.cardBorder, width: 0.7),
     );
     final blur = glass.effectiveBlur;
     final box = Container(

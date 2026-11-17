@@ -53,28 +53,38 @@ ThemeData buildThemeData(AppPalette palette, {GlassSettings? glass}) {
     appBarTheme: AppBarTheme(
       backgroundColor: palette.windowBg,
       foregroundColor: palette.textDark,
+      surfaceTintColor: Colors.transparent,
       elevation: 0,
-      centerTitle: false,
+      scrolledUnderElevation: 0,
+      centerTitle: true,
+      toolbarHeight: 56,
+      titleTextStyle: TextStyle(
+        color: palette.textDark,
+        fontSize: 17,
+        fontWeight: FontWeight.w700,
+      ),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: palette.entryBg,
+      // Borderless tinted well (design reference): the fill is the
+      // card surface tinted a whisper toward the accent, so the field
+      // reads inside white cards as well as on the window background.
+      fillColor: mix(palette.cardBg, palette.accent, 0.06),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(kInputRadius),
-        borderSide: BorderSide(color: palette.entryBorder),
+        borderSide: BorderSide.none,
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(kInputRadius),
-        borderSide: BorderSide(color: palette.entryBorder),
+        borderSide: BorderSide.none,
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(kInputRadius),
-        borderSide: BorderSide(color: palette.accent, width: 1.5),
+        borderSide: BorderSide(color: palette.accent, width: 1),
       ),
       hintStyle: TextStyle(color: palette.hint),
       labelStyle: TextStyle(color: palette.hint),
-      contentPadding:
-          const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      contentPadding: const EdgeInsets.all(14),
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
@@ -85,7 +95,7 @@ ThemeData buildThemeData(AppPalette palette, {GlassSettings? glass}) {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(kButtonRadius),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
       ),
     ),
     textButtonTheme: TextButtonThemeData(

@@ -189,7 +189,17 @@ void main() {
       await tester.pumpAndSettle();
       // Dashboard (listen) is the entry page.
       expect(find.text('开始监听'), findsOneWidget);
-      await tester.scrollUntilVisible(find.text('运行日志'), 200);
+      // The shell now has more than one Scrollable (the desktop rail
+      // scrolls too), so name the listen page's ListView explicitly:
+      // the Scrollable enclosing the 开始监听 button.
+      await tester.scrollUntilVisible(
+        find.text('运行日志'),
+        200,
+        scrollable: find.ancestor(
+          of: find.text('开始监听'),
+          matching: find.byType(Scrollable),
+        ),
+      );
       expect(find.text('运行日志'), findsOneWidget);
       // Bottom bar on narrow test viewport.
       await tester.tap(find.text('历史'));

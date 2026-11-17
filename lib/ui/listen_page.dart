@@ -16,7 +16,6 @@ import 'package:flutter/material.dart';
 
 import '../core.dart';
 import '../theme/app_theme.dart';
-import '../theme/glass.dart';
 import '../theme/palette.dart';
 import 'app_state.dart';
 import 'log_store.dart';
@@ -96,13 +95,9 @@ class _ListenPageState extends State<ListenPage> {
             padding: const EdgeInsets.all(16),
             children: [
               // Hero: title + today count + listen/login status.
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  gradient: heroGradient(palette),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: palette.heroBorder),
-                ),
+              // A plain card, not a saturated gradient band (design
+              // reference: restrained hierarchy, tint-derived surfaces).
+              AppCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -111,8 +106,8 @@ class _ListenPageState extends State<ListenPage> {
                         Expanded(
                           child: Text(
                             '今日抢单 ${_state.todaySuccessCount}',
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: palette.textDark,
                               fontSize: 20,
                               fontWeight: FontWeight.bold,
                             ),
@@ -146,7 +141,7 @@ class _ListenPageState extends State<ListenPage> {
                     Text(
                       '$listenLabel · $loginLabel',
                       style: TextStyle(
-                        color: palette.heroStatDim,
+                        color: palette.hint,
                         fontSize: 13,
                       ),
                     ),
@@ -155,7 +150,7 @@ class _ListenPageState extends State<ListenPage> {
                         '本周接单 ${stats.orderCount} · '
                         '续单率 ${stats.orderRate?.toStringAsFixed(0) ?? '—'}%',
                         style: TextStyle(
-                          color: palette.heroStatDim,
+                          color: palette.hint,
                           fontSize: 13,
                         ),
                       ),
@@ -432,8 +427,8 @@ class _LogView extends StatelessWidget {
           height: 260,
           decoration: BoxDecoration(
             color: palette.cardBg,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: palette.cardBorder),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: palette.cardBorder, width: 0.7),
           ),
           child: entries.isEmpty
               ? Center(

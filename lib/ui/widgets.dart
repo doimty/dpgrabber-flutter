@@ -31,6 +31,8 @@ class AppCard extends StatelessWidget {
     return GlassBox(
       palette: state.theme.palette,
       glass: state.glass,
+      // Grouped-card radius (design reference: 16).
+      radius: 16,
       padding: padding,
       margin: margin,
       child: child,
@@ -49,14 +51,16 @@ class SectionTitle extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = _paletteOf(context);
     return Padding(
-      padding: const EdgeInsets.only(top: 16, bottom: 8),
+      // Section label sits slightly indented from the card edge
+      // (design reference: left 4, bottom 10).
+      padding: const EdgeInsets.only(top: 20, bottom: 10, left: 4),
       child: Row(
         children: [
           Expanded(
             child: Text(
               title,
               style: TextStyle(
-                fontSize: 15,
+                fontSize: 14,
                 fontWeight: FontWeight.w600,
                 color: palette.textDark,
               ),
@@ -110,6 +114,7 @@ class LabeledField extends StatelessWidget {
   final bool enabled;
   final List<TextInputFormatter>? inputFormatters;
   final void Function(String)? onChanged;
+  final Widget? suffixIcon;
 
   const LabeledField({
     super.key,
@@ -122,6 +127,7 @@ class LabeledField extends StatelessWidget {
     this.enabled = true,
     this.inputFormatters,
     this.onChanged,
+    this.suffixIcon,
   });
 
   @override
@@ -143,7 +149,10 @@ class LabeledField extends StatelessWidget {
             enabled: enabled,
             inputFormatters: inputFormatters,
             onChanged: onChanged,
-            decoration: InputDecoration(hintText: hint),
+            decoration: InputDecoration(
+              hintText: hint,
+              suffixIcon: suffixIcon,
+            ),
             style: TextStyle(color: palette.textDark),
           ),
         ],

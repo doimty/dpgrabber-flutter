@@ -311,21 +311,31 @@ class _SettingsPageState extends State<SettingsPage> {
                   children: [
                     DropdownButtonFormField<GlassLevel>(
                       initialValue: _state.glass.level,
+                      isExpanded: true,
                       decoration: const InputDecoration(
                         labelText: '玻璃档位',
                       ),
                       items: const [
                         DropdownMenuItem(
                           value: GlassLevel.clear,
-                          child: Text('通透（不透明度 .40 / 模糊 8）'),
+                          child: Text(
+                            '通透（不透明度 .40 / 模糊 8）',
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                         DropdownMenuItem(
                           value: GlassLevel.frosted,
-                          child: Text('磨砂（不透明度 .93 / 模糊 18）'),
+                          child: Text(
+                            '磨砂（不透明度 .93 / 模糊 18）',
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                         DropdownMenuItem(
                           value: GlassLevel.solid,
-                          child: Text('实色（不透明度 1 / 无模糊）'),
+                          child: Text(
+                            '实色（不透明度 1 / 无模糊）',
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                       onChanged: (v) {

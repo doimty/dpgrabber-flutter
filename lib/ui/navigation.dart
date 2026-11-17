@@ -6,6 +6,7 @@
 library;
 
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -29,12 +30,6 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   late int _index;
-
-  static const _destinations = [
-    (Icons.radar, '监听'),
-    (Icons.history, '历史'),
-    (Icons.settings, '设置'),
-  ];
 
   @override
   void initState() {
@@ -75,13 +70,10 @@ class _AppShellState extends State<AppShell> {
               }
               return Scaffold(
                 body: IndexedStack(index: _index, children: pages),
-                bottomNavigationBar: BottomNavigationBar(
-                  currentIndex: _index,
-                  onTap: (i) => setState(() => _index = i),
-                  items: [
-                    for (final (icon, label) in _destinations)
-                      BottomNavigationBarItem(icon: Icon(icon), label: label),
-                  ],
+                bottomNavigationBar: _BottomPill(
+                  state: widget.state,
+                  index: _index,
+                  onSelect: (i) => setState(() => _index = i),
                 ),
               );
             },
@@ -113,41 +105,77 @@ class _Rail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = state.theme.palette;
-    return Container(
+    final glass = state.glass;
+    // Compact rail on short windows (design reference: height < 560).
+    final compact = MediaQuery.sizeOf(context).height < 560;
+    final bar = Container(
       width: kDesktopRailWidth,
-      color: palette.sidebarBg,
+      decoration: BoxDecoration(
+        color: palette.cardBg.withValues(alpha: glass.level.opacity),
+        border: Border(
+          right: BorderSide(color: palette.cardBorder, width: 0.5),
+        ),
+      ),
       child: SafeArea(
+        right: false,
         child: Column(
           children: [
-            const SizedBox(height: 16),
-            _RailAvatar(palette: palette, label: _initials),
-            const SizedBox(height: 24),
-            for (var i = 0; i < _destinations.length; i++)
-              _RailItem(
-                icon: _destinations[i].$1,
-                label: _destinations[i].$2,
-                selected: i == index,
-                palette: palette,
-                onTap: () => onSelect(i),
-              ),
-            const Spacer(),
-            IconButton(
-              tooltip: '主题：${palette.name}',
-              onPressed: () => _cycleTheme(),
-              icon: Icon(Icons.palette, color: palette.accent),
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: compact ? 12 : 24),
+              child: _AppMark(palette: palette),
             ),
-            const SizedBox(height: 12),
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var i = 0; i < _destinations.length; i++)
+                      _RailItem(
+                        icon: _destinations[i].$1,
+                        label: _destinations[i].$2,
+                        selected: i == index,
+                        compact: compact,
+                        palette: palette,
+                        onTap: () => onSelect(i),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.only(bottom: compact ? 10 : 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: '主题：${palette.name}',
+                    onPressed: () => _cycleTheme(),
+                    icon: Icon(Icons.palette, color: palette.accent),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '多陪抢单',
+                    style: TextStyle(fontSize: 10, color: palette.hint),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
     );
-  }
-
-  String get _initials {
-    final name = state.clerk?.name ?? state.config.clerkName;
-    if (name.isNotEmpty) return name.characters.first.toUpperCase();
-    final phone = state.currentPhone;
-    return phone.isEmpty ? '多' : phone.characters.first;
+    // No blur at the solid level or in low-power mode: the bar degrades
+    // to a plain translucent strip, never to an invisible one.
+    if (glass.effectiveBlur <= 0) return bar;
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: glass.effectiveBlur,
+          sigmaY: glass.effectiveBlur,
+        ),
+        child: bar,
+      ),
+    );
   }
 
   void _cycleTheme() {
@@ -157,34 +185,22 @@ class _Rail extends StatelessWidget {
   }
 }
 
-class _RailAvatar extends StatelessWidget {
+/// App mark at the top of the rail (design reference: 34px app icon).
+class _AppMark extends StatelessWidget {
   final AppPalette palette;
-  final String label;
 
-  const _RailAvatar({required this.palette, required this.label});
+  const _AppMark({required this.palette});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 44,
-      height: 44,
-      alignment: Alignment.center,
+      width: 40,
+      height: 40,
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [palette.heroTop, palette.heroBottom],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        shape: BoxShape.circle,
+        color: palette.accent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
       ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
+      child: Icon(Icons.radar, color: palette.accent, size: 22),
     );
   }
 }
@@ -193,6 +209,7 @@ class _RailItem extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool selected;
+  final bool compact;
   final AppPalette palette;
   final VoidCallback onTap;
 
@@ -200,35 +217,175 @@ class _RailItem extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.selected,
+    required this.compact,
     required this.palette,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? palette.accent : palette.sidebarHint;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+    // Inactive items read as plain text on clear glass (design
+    // reference); the selected item is the accent, with no pill.
+    final color = selected ? palette.accent : palette.textDark;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 60, minWidth: 48),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          width: 64,
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: selected ? palette.selectionBg : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
+        customBorder: const StadiumBorder(),
+        splashColor: palette.accent.withValues(alpha: 0.12),
+        highlightColor: palette.accent.withValues(alpha: 0.05),
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: 18,
+            vertical: compact ? 8 : 18,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: color),
-              const SizedBox(height: 2),
+              Icon(icon, color: color, size: 26),
+              const SizedBox(height: 4),
               Text(
                 label,
-                style: TextStyle(color: color, fontSize: 11),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 12,
+                  height: 1.15,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Floating glass pill navigation (phones, design reference): a 64px
+/// bar with 16/12 margins, max 560 wide, blurred translucent fill,
+/// and a sliding accent-tinted pill behind the selected destination.
+/// Own implementation — no reference code is used.
+class _BottomPill extends StatelessWidget {
+  final AppState state;
+  final int index;
+  final ValueChanged<int> onSelect;
+
+  const _BottomPill({
+    required this.state,
+    required this.index,
+    required this.onSelect,
+  });
+
+  static const _destinations = [
+    (Icons.radar, '监听'),
+    (Icons.history, '历史'),
+    (Icons.settings, '设置'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = state.theme.palette;
+    final glass = state.glass;
+    final pill = Container(
+      height: 64,
+      decoration: BoxDecoration(
+        color: palette.cardBg.withValues(alpha: glass.level.opacity),
+        borderRadius: BorderRadius.circular(32),
+        border: Border.all(color: palette.cardBorder, width: 0.7),
+      ),
+      child: Stack(
+        children: [
+          AnimatedAlign(
+            alignment: switch (index) {
+              0 => Alignment.centerLeft,
+              1 => Alignment.center,
+              _ => Alignment.centerRight,
+            },
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            child: FractionallySizedBox(
+              widthFactor: 1 / 3,
+              child: Center(
+                child: Container(
+                  height: 48,
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  decoration: BoxDecoration(
+                    color: palette.accent.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Row(
+            children: [
+              for (var i = 0; i < _destinations.length; i++)
+                Expanded(
+                  child: InkWell(
+                    onTap: () => onSelect(i),
+                    customBorder: const StadiumBorder(),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          _destinations[i].$1,
+                          color:
+                              i == index ? palette.accent : palette.textDark,
+                          size: 26,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _destinations[i].$2,
+                          style: TextStyle(
+                            color:
+                                i == index ? palette.accent : palette.textDark,
+                            fontSize: 12,
+                            height: 1.15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+    final bar = glass.effectiveBlur <= 0
+        ? pill
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(32),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(
+                sigmaX: glass.effectiveBlur,
+                sigmaY: glass.effectiveBlur,
+              ),
+              child: pill,
+            ),
+          );
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Align(
+        heightFactor: 1,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(32),
+              boxShadow: [
+                BoxShadow(
+                  color: palette.textDark.withValues(alpha: 0.12),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: bar,
           ),
         ),
       ),

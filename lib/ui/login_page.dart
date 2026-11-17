@@ -144,6 +144,22 @@ class _LoginPageState extends State<LoginPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    Center(
+                      child: Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: palette.accent.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Icon(
+                          Icons.radar,
+                          color: palette.accent,
+                          size: 32,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     Text(
                       '多陪抢单',
                       textAlign: TextAlign.center,
@@ -179,40 +195,23 @@ class _LoginPageState extends State<LoginPage> {
                               LengthLimitingTextInputFormatter(11),
                             ],
                           ),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(
-                                child: LabeledField(
-                                  label: '密码',
-                                  controller: _passwordController,
-                                  hint: '账号密码',
-                                  obscureText: !_showPassword,
-                                ),
+                          LabeledField(
+                            label: '密码',
+                            controller: _passwordController,
+                            hint: '账号密码',
+                            obscureText: !_showPassword,
+                            suffixIcon: IconButton(
+                              tooltip: _showPassword ? '隐藏密码' : '显示密码',
+                              onPressed: () => setState(
+                                () => _showPassword = !_showPassword,
                               ),
-                              const SizedBox(width: 8),
-                              Padding(
-                                padding: const EdgeInsets.only(top: 22),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Checkbox(
-                                      value: _showPassword,
-                                      onChanged: (v) => setState(
-                                        () => _showPassword = v ?? false,
-                                      ),
-                                    ),
-                                    Text(
-                                      '显示密码',
-                                      style: TextStyle(
-                                        color: palette.textDark,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                              icon: Icon(
+                                _showPassword
+                                    ? Icons.visibility_off
+                                    : Icons.visibility,
+                                color: palette.hint,
                               ),
-                            ],
+                            ),
                           ),
                           const SizedBox(height: 4),
                           ElevatedButton(
