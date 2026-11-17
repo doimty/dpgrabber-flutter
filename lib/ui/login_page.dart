@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core.dart';
+import '../wenxi_ui/liquid_glass.dart';
 import 'app_state.dart';
 import 'widgets.dart';
 
@@ -214,8 +215,13 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                           ),
                           const SizedBox(height: 4),
-                          ElevatedButton(
+                          LiquidGlassButton(
                             onPressed: _loggingIn ? null : _login,
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 14,
+                              ),
+                            ),
                             child: _loggingIn
                                 ? const SizedBox(
                                     height: 18,
@@ -225,7 +231,12 @@ class _LoginPageState extends State<LoginPage> {
                                       color: Colors.white,
                                     ),
                                   )
-                                : const Text('登录验证'),
+                                : const Text(
+                                    '登录验证',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                           ),
                           const SizedBox(height: 6),
                           Text(

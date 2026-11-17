@@ -10,9 +10,12 @@ import '../core.dart';
 import '../theme/app_theme.dart';
 import '../theme/glass.dart';
 import '../theme/palette.dart';
+import '../wenxi_ui/liquid_glass.dart';
 import 'app_state.dart';
 
-/// A themed card (glass surface, 12px radius).
+/// A themed card — a wenxi liquid-glass surface (16px radius). The
+/// glass style follows the MaterialApp's [AppAppearance] (wired from
+/// the glass settings); colours keep coming from the active palette.
 class AppCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
@@ -27,15 +30,13 @@ class AppCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final state = _stateOf(context);
-    return GlassBox(
-      palette: state.theme.palette,
-      glass: state.glass,
-      // Grouped-card radius (design reference: 16).
-      radius: 16,
-      padding: padding,
-      margin: margin,
-      child: child,
+    return Padding(
+      padding: margin ?? EdgeInsets.zero,
+      child: LiquidGlassSurface(
+        // Grouped-card radius (design reference: 16).
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(padding: padding, child: child),
+      ),
     );
   }
 }
