@@ -24,6 +24,29 @@ flutter analyze
 flutter test
 ```
 
+## UI（移植自 wenxi）
+
+UI 基建移植自 [z7786/wenxi](https://github.com/z7786/wenxi)（文析助手），
+位于 `lib/wenxi_ui/`：
+
+| 文件 | 来源 | 说明 |
+|---|---|---|
+| `appearance.dart` | wenxi `domain/appearance.dart` | 色板 / 玻璃风格（`WenxiPalette` 改为 class，`wenxiPaletteFor` 把 dpgrabber 六主题适配进 wenxi 管线） |
+| `app_theme.dart` | wenxi `ui/app_theme.dart` | `appTheme()` + `AppAppearance` ThemeExtension |
+| `liquid_glass.dart` | wenxi `ui/liquid_glass.dart` | 液态玻璃（fragment shader 折射）+ `LiquidGlassButton` |
+| `liquid_bottom_navigation.dart` | wenxi `ui/liquid_bottom_navigation.dart` | 弹簧动画液态底栏（SVG 换 Material 图标，去掉传输角标） |
+| `app_navigation.dart` | wenxi `ui/app_navigation.dart` | 88px 玻璃侧栏 + 液态底栏（多陪抢单三目的地） |
+| `app_switch.dart` / `loading_indicator.dart` / `app_text_scale.dart` / `desktop_mouse_back.dart` / `skeleton_loading.dart` / `theme_reveal.dart` | wenxi 同名文件 | 通用组件；`theme_reveal` 去掉了 Android 原生截屏通道 |
+
+接线：`main.dart` 用 `appTheme()` 构建 MaterialApp（dpgrabber 主题 id
+与玻璃档位仍由 `AppState` 持有并映射），`ui/navigation.dart` 的
+`AppShell` 使用 `AppNavigation`。页面内自绘颜色仍走 `theme/palette.dart`
+（PORTING_CONTRACT §9 的 36 键）。
+
+液态玻璃 shader 来自 wenxi（`assets/shaders/liquid_glass.frag`，源自
+Kyant 的 AndroidLiquidGlass / Backdrop，Apache-2.0，见
+`assets/licenses/AndroidLiquidGlass-LICENSE.txt`）。
+
 构建：
 
 ```bash

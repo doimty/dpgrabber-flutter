@@ -9,16 +9,25 @@
 /// notifications come from `lib/bridge/` ([AppBridges]). Credentials
 /// use the bridge's secure store; the core's development-only file
 /// store is only the fallback when no store is passed in.
+///
+/// UI: the wenxi UI system (appTheme + ThemeExtension appearance +
+/// liquid glass) drives the MaterialApp; dpgrabber's own palette ids
+/// remain the persisted theme source and are adapted in
+/// `wenxi_ui/appearance.dart`.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'bridge/bridge.dart';
-import 'theme/app_theme.dart';
+import 'theme/glass.dart' show GlassLevel;
 import 'ui/app_state.dart';
 import 'ui/login_page.dart';
 import 'ui/navigation.dart';
+import 'wenxi_ui/app_text_scale.dart';
+import 'wenxi_ui/app_theme.dart';
+import 'wenxi_ui/appearance.dart';
+import 'wenxi_ui/theme_reveal.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,11 +57,27 @@ class DpgApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: state.theme,
+      animation: Listenable.merge([state.theme, state.glass]),
       builder: (context, _) {
+        final palette = state.theme.palette;
+        final brightness = palette.isDark ? Brightness.dark : Brightness.light;
+        final glassStyle = switch (state.glass.level) {
+          GlassLevel.clear => GlassStyle.clear,
+          GlassLevel.frosted => GlassStyle.frosted,
+          GlassLevel.solid => GlassStyle.solid,
+        };
         return MaterialApp(
           title: '多陪抢单',
-          theme: buildThemeData(state.theme.palette),
+          debugShowCheckedModeBanner: false,
+          theme: appTheme(
+            brightness,
+            palette: wenxiPaletteFor(palette),
+            glassStyle: glassStyle,
+            glassLowPower: state.glass.lowPower,
+          ),
+          builder: (context, child) => ThemeRevealHost(
+            child: AppTextScale(percent: 100, child: child ?? const SizedBox()),
+          ),
           home: AnimatedBuilder(
             animation: state,
             builder: (context, _) {
