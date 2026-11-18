@@ -15,7 +15,6 @@ import 'package:path_provider/path_provider.dart';
 import '../core/credential_store.dart';
 import 'keep_alive.dart';
 import 'local_notifications.dart';
-import 'secure_credential_store.dart';
 import 'windows_tray.dart';
 
 class AppBridges {
@@ -34,7 +33,6 @@ class AppBridges {
   /// Build all bridges. Injectable pieces are for tests; production
   /// callers pass nothing.
   static Future<AppBridges> initialize({
-    SecureStorageBackend? storageBackend,
     Directory? configDirectory,
     MethodChannel? keepAliveChannel,
     LocalNotificationBackend? notificationBackend,
@@ -42,34 +40,14 @@ class AppBridges {
   }) async {
     final dir = configDirectory ?? await getApplicationDocumentsDirectory();
     // Plain local file on ALL platforms, exactly like the DPPP PC build
-    // (which keeps accounts/ as JSON in the documents dir).
-    // flutter_secure_storage (iOS Keychain / Android
-    // EncryptedSharedPreferences) is namespaced by the signing identity:
-    // Yahel re-signs the unsigned IPA herself, so a re-signed build
-    // cannot see Keychain items saved by a differently-signed build and
-    // the user silently lands back on the login page. The file store
-    // survives re-signing. The UI must keep showing the unencrypted
-    // warning while this store is in use (never silently downgrade).
+    // (which keeps accounts/ as JSON in the documents dir). This is
+    // the credential design, not a fallback: the platform secure
+    // store is namespaced by the signing identity, and Yahel re-signs
+    // the unsigned IPA herself, so a re-signed build cannot see items
+    // saved by a differently-signed build and the user silently
+    // lands back on the login page. The file store survives
+    // re-signing.
     final store = FileCredentialStore(dir);
-    // One-time migration: accounts saved by older builds live in the
-    // secure store. If the file store is empty, copy the secure store's
-    // active account in once, so nobody has to log in again after the
-    // switch. Best-effort: a broken secure store must never block
-    // startup (a fresh login just recreates the file entry).
-    try {
-      if (await store.loadAccount() == null) {
-        final legacy = SecureCredentialStore(dir, backend: storageBackend);
-        final account = await legacy.loadAccount();
-        if (account != null) {
-          await store.saveAccount(
-            phone: account.phone,
-            password: account.password,
-          );
-        }
-      }
-    } catch (_) {
-      // Secure store unreadable (or empty): start fresh.
-    }
     final keepAlive = KeepAlive(channel: keepAliveChannel);
     final notifications =
         LocalNotifications(backend: notificationBackend);

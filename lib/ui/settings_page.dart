@@ -4,8 +4,10 @@
 /// standalone login page — the app always boots to the shell, and an
 /// unlogged-in user logs in from Settings, like the original panel's
 /// "账号与店铺" section (phone + password, saved accounts, clear with
-/// confirmation). Logout clears only the in-memory session; the saved
-/// account stays for one-tap re-login.
+/// confirmation). There is no sign-out button: a saved account stays
+/// signed in across restarts (the app rebuilds the live session
+/// itself on cold start), and removing the account entirely is
+/// "清除已保存账号".
 /// All config items (§2): order conditions, confirm wait, run/rest,
 /// shop/timeout/dedup, push, voice, rotation, TLS, AES keys, item
 /// name map, blacklist + memo keywords (advanced).
@@ -237,12 +239,6 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  void _logout() {
-    _state.logout();
-    _passwordController.clear();
-    setState(() {});
-  }
-
   List<String> _lines(String key) => _c[key]!
       .text
       .split('\n')
@@ -472,17 +468,6 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 10),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: OutlinedButton(
-                          onPressed: _logout,
-                          child: Text(
-                            '退出登录',
-                            style: TextStyle(color: palette.logError),
-                          ),
-                        ),
-                      ),
                     ],
                   ),
                 )
@@ -491,10 +476,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (!_state.hasSecureStorage)
-                        ErrorBanner(
-                          FileCredentialStore.unencryptedWarning,
-                        ),
                       Text(
                         _state.config.phone.isEmpty
                             ? '还没有账号配置，登录后会自动建档'

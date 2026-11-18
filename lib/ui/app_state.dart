@@ -11,11 +11,19 @@
 /// - account rotation timer lives here in the UI layer (core only
 ///   provides the config items — core handoff deviation #5)
 ///
-/// Credential storage: main() passes the bridge's secure store
-/// ([SecureCredentialStore]); without it this falls back to the
-/// core's development-only [FileCredentialStore] and the UI shows its
-/// unencrypted warning (§1.7 — never silently downgrade). Swap point:
-/// pass a secure [CredentialStore] into the constructor.
+/// Credential storage: plain local file ([FileCredentialStore]),
+/// the same as the DPPP PC build — the file store is the design on
+/// all platforms, not a fallback. The platform secure store is
+/// namespaced by the signing identity, and a re-signed IPA cannot
+/// read items saved by a differently-signed build, so it
+/// silently lost logins on relaunch; the file survives re-signing.
+///
+/// Session: this class is the single source of truth for the live
+/// session. The saved account alone is NOT a session — after a cold
+/// start `session` is null until [ensureSession] builds one from the
+/// saved credentials (see [init]). There is no sign-out button: the
+/// account stays signed in until its saved credentials are cleared
+/// ([clearAccount]).
 library;
 
 import 'dart:async';
@@ -62,7 +70,19 @@ class AppState extends ChangeNotifier {
   late Notifier notifier;
   ListenEngine? engine;
 
-  Session? session;
+  /// The live session — the single source of truth (§10.2). The
+  /// setter is the ONE sync point to the client's mirror:
+  /// every assignment here also writes `client.session`, and nothing
+  /// else writes the mirror. The client never reads its mirror for
+  /// requests (see `ApiClient.request`): every authenticated call
+  /// takes this session explicitly.
+  Session? _session;
+  Session? get session => _session;
+  set session(Session? value) {
+    _session = value;
+    client.session = value;
+  }
+
   Clerk? clerk;
   bool initialized = false;
   bool loggedIn = false;
@@ -92,7 +112,7 @@ class AppState extends ChangeNotifier {
   final Set<String> _recordedGrabKeys = {};
   bool _engineRebuilding = false;
 
-  AppState({required this.appDir, CredentialStore? store})
+  AppState({required this.appDir, CredentialStore? store, this._transport})
     : store = store ?? FileCredentialStore(appDir),
       accounts = AccountStore(appDir),
       background = BackgroundController(appDir),
@@ -100,11 +120,13 @@ class AppState extends ChangeNotifier {
         File('${appDir.path}/dpgrabber_history.json'),
       );
 
+  /// Test seam: fake network for the client. Null in production
+  /// (the client builds its own `HttpClientTransport`).
+  final HttpTransport? _transport;
+
   /// Wallpaper settings + content-addressed image store (wenxi
   /// background system). Persisted under appDir/backgrounds/.
   final BackgroundController background;
-
-  bool get hasSecureStorage => store.isSecureStorage;
 
   String get currentPhone => loginPhone ?? config.phone;
 
@@ -140,15 +162,13 @@ class AppState extends ChangeNotifier {
     savedAccounts = accounts.listAccounts();
     await background.load();
     initialized = true;
-    if (!hasSecureStorage) {
-      logs.add(
-        LogLevel.warning,
-        store is SecureCredentialStore
-            ? SecureCredentialStore.unencryptedWarning
-            : FileCredentialStore.unencryptedWarning,
-      );
-    }
     notifyListeners();
+    // A saved account is not a live session: rebuild it in the
+    // background so the listen page never reads "未登录" after a
+    // cold start and week stats never 401 on a null session.
+    // Best-effort only — a failure is logged, never surfaced, and
+    // never clears the saved account.
+    if (loggedIn) unawaited(_restoreSessionInBackground());
   }
 
   void _syncListeningFlag() {
@@ -166,7 +186,11 @@ class AppState extends ChangeNotifier {
       aesKeyHexAlt: config.aesKeyHexAlt,
       aesIvHexAlt: config.aesIvHexAlt,
       verifyTls: config.verifyTls,
+      transport: _transport,
     );
+    // A fresh client starts with a null mirror: sync the live
+    // session (if any) back into it.
+    client.session = _session;
     notifier = Notifier(config);
     engine = ListenEngine(
       client: client,
@@ -274,6 +298,46 @@ class AppState extends ChangeNotifier {
     return s;
   }
 
+  /// Build (or rebuild) the live session from the saved credentials
+  /// (§10.2). The saved account alone is not a session, so any
+  /// authenticated entry calls this first when [session] is null.
+  /// Returns false when there are no saved credentials or the login
+  /// fails; never clears the saved account, never throws.
+  Future<bool> ensureSession() async {
+    if (session != null) return true;
+    final phone = loginPhone;
+    final password = _password;
+    if (phone == null ||
+        phone.isEmpty ||
+        password == null ||
+        password.isEmpty) {
+      return false;
+    }
+    try {
+      final s = await client.sessionForAccount(
+        phone,
+        password,
+        preferredShopId: config.shopId,
+      );
+      session = s;
+      lastError = null;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      logs.add(LogLevel.warning, '自动登录失败：$e');
+      return false;
+    }
+  }
+
+  /// Cold-start restore (§10.2): after [init] restores the saved
+  /// account, rebuild the live session in the background (never
+  /// blocks the shell), then refresh clerk info + item switches so
+  /// the listen page is fully live without a manual login.
+  Future<void> _restoreSessionInBackground() async {
+    if (!await ensureSession()) return;
+    await _refreshClerkAndSwitches();
+  }
+
   /// Download and cache the clerk avatar (DPPP `_fetch_avatar`):
   /// source `clerk.avatarUrl`, cached at `<appDir>/avatars/avatar_<id>.png`.
   /// Cosmetic only — never breaks login or listening.
@@ -370,8 +434,6 @@ class AppState extends ChangeNotifier {
     try {
       if (store is FileCredentialStore) {
         (store as FileCredentialStore).activePhone = digits;
-      } else if (store is SecureCredentialStore) {
-        (store as SecureCredentialStore).activePhone = digits;
       }
       final saved = await store.loadAccount();
       if (saved == null) {
@@ -392,25 +454,6 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return false;
     }
-  }
-
-  /// Log out of the current session (§10.2): stops listening and
-  /// clears the in-memory session only. Saved credentials + the
-  /// per-account config are kept, so one-tap re-login from the saved
-  /// list still works. Note: restarting the app restores the saved
-  /// account (init() auto-restores it, as before) — use
-  /// [clearAccount] to remove the account entirely.
-  void logout() {
-    stopListening();
-    session = null;
-    clerk = null;
-    _password = null;
-    loginPhone = null;
-    loggedIn = false;
-    avatarPath = '';
-    online = false;
-    lastError = null;
-    notifyListeners();
   }
 
   /// Clear the saved account (§10.2): deletes credentials + the
@@ -443,6 +486,12 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+    // Cold start leaves `session` null until the background restore
+    // finishes: build it now so the engine reuses a live session
+    // instead of logging in again (and so the hero shows the shop
+    // from the moment listening starts). The engine still logs in
+    // itself when this fails.
+    await ensureSession();
     final ok = await engine!.start(
       currentPhone,
       _password!,
@@ -492,6 +541,11 @@ class AppState extends ChangeNotifier {
 
   /// Online switch (§10.3): calls `setOnline`, rolls back on failure.
   Future<bool> setOnline(bool value) async {
+    if (!await ensureSession()) {
+      logs.add(LogLevel.error, '在线状态切换失败：未登录');
+      notifyListeners();
+      return false;
+    }
     try {
       await client.setOnline(value ? 1 : 2, session: session);
       online = value;
@@ -514,6 +568,11 @@ class AppState extends ChangeNotifier {
     } else {
       next.remove(switchId);
     }
+    if (!await ensureSession()) {
+      logs.add(LogLevel.error, '接单类型切换失败：未登录');
+      notifyListeners();
+      return false;
+    }
     try {
       await client.setItemSwitch(switchId, next, session: session);
       itemSwitchIds = next;
@@ -534,6 +593,14 @@ class AppState extends ChangeNotifier {
     weekStatsLoading = true;
     notifyListeners();
     try {
+      // A null session here used to call the API with no auth headers
+      // and log a 401: build the session from the saved credentials
+      // first, and skip the call entirely when there is nothing to
+      // log in with.
+      if (!await ensureSession()) {
+        logs.add(LogLevel.warning, '本周统计拉取失败：未登录');
+        return;
+      }
       final result =
           await fetchWeekStatistics(client, session: session);
       weekStats = result.stats;

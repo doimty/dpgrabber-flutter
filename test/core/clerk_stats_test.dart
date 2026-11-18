@@ -84,6 +84,7 @@ void main() {
         },
       });
       final result = await fetchWeekStatistics(testClient(transport),
+          session: const Session(token: 'tok-1', sid: '92'),
           now: DateTime(2026, 11, 14)); // Saturday; Monday is 11-09
       expect(result.stats?.orderCount, 8);
       expect(result.fallbackOrderTotal, isNull);
@@ -98,6 +99,7 @@ void main() {
           {'code': 0, 'list': {}});
       transport.onJson('/s/c/order/list', {'code': 0, 'total': 5});
       final result = await fetchWeekStatistics(testClient(transport),
+          session: const Session(token: 'tok-1', sid: '92'),
           now: DateTime(2026, 11, 14));
       expect(result.stats, isNull);
       expect(result.fallbackOrderTotal, 5);

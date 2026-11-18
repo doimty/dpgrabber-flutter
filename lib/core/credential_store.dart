@@ -3,23 +3,15 @@
 ///
 /// Contract shape: [CredentialStore] is the abstract interface the core
 /// depends on. The production implementation is [FileCredentialStore]
-/// (plain JSON under the app documents directory): the platform secure
-/// store (Android EncryptedSharedPreferences / iOS Keychain via
-/// `flutter_secure_storage`) is namespaced by the signing identity, and
-/// the unsigned IPA is re-signed before install, so a re-signed build
-/// cannot read credentials saved by a differently-signed build — users
-/// silently lost their login on relaunch. The file store survives
-/// re-signing, exactly like the DPPP PC build. [SecureCredentialStore]
-/// is kept only as the one-time migration source for accounts saved by
-/// older builds (see `AppBridges.initialize`).
-///
-/// [FileCredentialStore] is a DEVELOPMENT-ONLY implementation that keeps
-/// credentials in a plain JSON file under the app documents directory.
-/// It exists so the core can be exercised end-to-end before the bridge
-/// lands; it must be replaced by the secure implementation before any
-/// release. It reports [isSecureStorage] == false, and the UI must show
-/// the "credentials are not encrypted" warning whenever it is in use
-/// (§1.7: never silently downgrade).
+/// (plain JSON under the app documents directory): the file store is
+/// the design on all platforms, exactly like the DPPP PC build. The
+/// platform secure store is namespaced by the signing identity, and
+/// the unsigned IPA is re-signed before install, so a re-signed
+/// build cannot read credentials saved by a differently-signed
+/// build — users silently lost their login on relaunch. The file
+/// store survives re-signing. There is no secure store in this app
+/// anymore: it was removed because it bought nothing on a re-signed
+/// build and kept breaking login.
 ///
 /// Tokens are never persisted by any implementation (§4.4).
 ///
@@ -41,10 +33,6 @@ abstract class CredentialStore {
   Future<({String phone, String password})?> loadAccount();
   Future<void> clearAccount();
 
-  /// The platform must surface this warning when the store is not
-  /// encrypted (Android snapshot behaviour, §1.7).
-  bool get isSecureStorage;
-
   Future<AppConfig> loadConfig();
   Future<void> saveConfig(AppConfig config);
 }
@@ -52,19 +40,16 @@ abstract class CredentialStore {
 /// Plain-file credential store, used on ALL platforms.
 ///
 /// File: `<directory>/credentials_dev.json` — a JSON map
-/// `{digitsPhone: password}`. Plaintext. The UI must show the
-/// "credentials are not encrypted" warning whenever it is in use
-/// (§1.7: never silently downgrade).
+/// `{digitsPhone: password}`. Plaintext, exactly like the DPPP PC
+/// build: credentials live in a file under the app documents
+/// directory, and that is the design (see the header comment above),
+/// not a downgrade to warn about.
 ///
-/// Why not the platform secure store: `flutter_secure_storage` (iOS
-/// Keychain / Android EncryptedSharedPreferences) is namespaced by the
+/// Why not the platform secure store: it is namespaced by the
 /// signing identity, and the unsigned IPA is re-signed before install —
-/// a re-signed build cannot read Keychain items saved by a
-/// differently-signed build, so users silently lost their login on
-/// relaunch. The plain file survives re-signing, exactly like the DPPP
-/// PC build. [SecureCredentialStore] is kept only as the one-time
-/// migration source for accounts saved by older builds (see
-/// [AppBridges.initialize]).
+/// a re-signed build cannot read items saved by a differently-signed
+/// build, so users silently lost their login on relaunch. The plain
+/// file survives re-signing, exactly like the DPPP PC build.
 class FileCredentialStore implements CredentialStore {
   final Directory directory;
 
@@ -73,13 +58,6 @@ class FileCredentialStore implements CredentialStore {
   String? activePhone;
 
   FileCredentialStore(this.directory, {this.activePhone});
-
-  @override
-  bool get isSecureStorage => false;
-
-  /// Warning the UI must show while this store is in use.
-  static const String unencryptedWarning =
-      '凭据保存在本机用户目录下的文件中（与 PC 版一致），未加密';
 
   File get _credentialsFile =>
       File('${directory.path}/credentials_dev.json');

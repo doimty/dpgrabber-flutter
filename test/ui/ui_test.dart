@@ -19,6 +19,8 @@ import 'package:dpgrabber/ui/settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../core/test_helpers.dart';
+
 Future<AppState> _testState() async {
   final dir = await Directory.systemTemp.createTemp('dpgrabber_ui_test_');
   final state = AppState(appDir: dir);
@@ -163,18 +165,8 @@ void main() {
       expect(find.text('手机号应为 11 位数字'), findsOneWidget);
     });
 
-    testWidgets('unencrypted-storage warning is shown', (tester) async {
-      final state = await _testStateWith(tester);
-      addTearDown(state.dispose);
-      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
-      await tester.pumpAndSettle();
-      expect(
-        find.text(FileCredentialStore.unencryptedWarning),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('logged-in account display + logout', (tester) async {
+    testWidgets('logged-in account display has no sign-out button',
+        (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
       state.loggedIn = true;
@@ -188,11 +180,164 @@ void main() {
       expect(find.text('店铺 92'), findsOneWidget);
       expect(find.text('ID：230313'), findsOneWidget);
       expect(find.text('登录验证'), findsNothing);
-      await tester.tap(find.text('退出登录'));
+      // No way back to "logged out with a saved account": the
+      // account stays signed in until its credentials are cleared.
+      expect(find.text('退出登录'), findsNothing);
+    });
+  });
+
+  group('cold-start auto-login (§10.2, login-bug2 video sequence)', () {
+    /// A state with a saved account + a stubbed login flow, as the
+    /// video showed it: phone 138****0000, clerk 加冰 / ID 230313,
+    /// shop 92, week stats 3 orders at a 25.0% renewal rate.
+    Future<AppState> savedAccountState() async {
+      final dir =
+          await Directory.systemTemp.createTemp('dpgrabber_login_bug2_');
+      final transport = FakeTransport();
+      transport.onJson('/s/duopei-account/login', {
+        'code': 0,
+        'data': {'token': 'base-tok', 'shopId': 92},
+      });
+      transport.onJson('/s/duopei-account/list-shop-account', {
+        'code': 0,
+        'data': [
+          {'shopId': 92, 'accountId': 'a92'},
+        ],
+      });
+      transport.onJson('/s/duopei-account/switch-account',
+          {'code': 0, 'data': {'token': 'tok-92'}});
+      transport.onJson('/s/balance/getBalance', {'code': 0});
+      transport.onJson('/s/c/clerk/get', {
+        'code': 0,
+        'clerk': {'id': 230313, 'name': '加冰', 'status': 1},
+      });
+      transport.onJson('/s/c/clerk/getItemSwitchList',
+          {'code': 0, 'itemSwitchList': [], 'clerkItemSwitchIds': []});
+      transport.onJson('/s/c/statistics/statisticsClerkOrder', {
+        'code': 0,
+        'list': {
+          'orderCount': 3,
+          'continuedCount': 1,
+          'continuedUserCount': 1,
+          'totalOrderCount': 3,
+          'continuedAmount': 10000,
+          'orderAmount': 40000,
+          'firstCount': 0,
+          'refundedCount': 0,
+        },
+      });
+      await FileCredentialStore(dir)
+          .saveAccount(phone: '13800000000', password: 'fake-pw');
+      final state = AppState(appDir: dir, transport: transport);
+      await state.init();
+      // init() kicks the restore off in the background: wait for it
+      // to land instead of calling ensureSession() ourselves, so
+      // this covers the real cold-start path. The clerk fetch runs
+      // right after the session, so wait for both.
+      for (var i = 0;
+          i < 100 && (state.session == null || state.clerk == null);
+          i++) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+      return state;
+    }
+
+    testWidgets('saved account -> live session after init, hero shows '
+        'the shop, stats succeed', (tester) async {
+      final state =
+          (await tester.runAsync(savedAccountState))!;
+      addTearDown(state.dispose);
+      expect(state.loggedIn, isTrue);
+      expect(state.session, isNotNull);
+      expect(state.session!.sid, '92');
+      expect(state.clerk?.name, '加冰');
+      expect(state.online, isTrue);
+
+      await tester.pumpWidget(_wrap(state, ListenPage(state: state)));
       await tester.pumpAndSettle();
-      expect(state.loggedIn, isFalse);
+      expect(find.textContaining('店铺 92'), findsOneWidget);
+      expect(find.text('未登录'), findsNothing);
+
+      // Week stats after the cold start: the call carries the
+      // restored session, so no 401.
+      await tester.runAsync(state.refreshWeekStats);
+      expect(state.weekStats, isNotNull);
+      expect(state.weekStats!.orderCount, 3);
+      expect(state.weekStats!.renewalRate, 25.0);
+      expect(
+        state.logs.entries
+            .any((e) => e.message.contains('本周统计拉取失败')),
+        isFalse,
+      );
+    });
+
+    testWidgets('stats called right after cold start never 401',
+        (tester) async {
+      // Same cold start as above, but do NOT wait for the background
+      // restore: call refreshWeekStats immediately, while the restore
+      // may still be in flight. The stats call must end with data,
+      // not a 401 — whichever side builds the session first.
+      final state = (await tester.runAsync(() async {
+        final dir =
+            await Directory.systemTemp.createTemp('dpgrabber_login_bug2b_');
+        final transport = FakeTransport();
+        transport.onJson('/s/duopei-account/login', {
+          'code': 0,
+          'data': {'token': 'base-tok', 'shopId': 92},
+        });
+        transport.onJson('/s/duopei-account/list-shop-account', {
+          'code': 0,
+          'data': [
+            {'shopId': 92, 'accountId': 'a92'},
+          ],
+        });
+        transport.onJson('/s/duopei-account/switch-account',
+            {'code': 0, 'data': {'token': 'tok-92'}});
+        transport.onJson('/s/balance/getBalance', {'code': 0});
+        transport.onJson('/s/c/clerk/get', {
+          'code': 0,
+          'clerk': {'id': 230313, 'name': '加冰', 'status': 1},
+        });
+        transport.onJson('/s/c/clerk/getItemSwitchList',
+            {'code': 0, 'itemSwitchList': [], 'clerkItemSwitchIds': []});
+        transport.onJson('/s/c/statistics/statisticsClerkOrder', {
+          'code': 0,
+          'list': {
+            'orderCount': 3,
+            'continuedCount': 1,
+            'continuedUserCount': 1,
+            'totalOrderCount': 3,
+            'continuedAmount': 10000,
+            'orderAmount': 40000,
+            'firstCount': 0,
+            'refundedCount': 0,
+          },
+        });
+        await FileCredentialStore(dir)
+            .saveAccount(phone: '13800000000', password: 'fake-pw');
+        final s = AppState(appDir: dir, transport: transport);
+        await s.init();
+        return s;
+      }))!;
+      addTearDown(state.dispose);
+      await tester.runAsync(state.refreshWeekStats);
+      expect(state.weekStats, isNotNull);
+      expect(state.weekStats!.orderCount, 3);
+      expect(
+        state.logs.entries
+            .any((e) => e.message.contains('本周统计拉取失败')),
+        isFalse,
+      );
+    });
+
+    testWidgets('ensureSession fails cleanly with no saved credentials',
+        (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
       expect(state.session, isNull);
-      expect(find.text('登录验证'), findsOneWidget);
+      expect(await tester.runAsync(state.ensureSession), isFalse);
+      expect(state.session, isNull);
+      expect(state.loggedIn, isFalse);
     });
   });
 

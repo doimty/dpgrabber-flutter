@@ -4,7 +4,7 @@ import 'package:dpgrabber/core.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  group('FileCredentialStore (dev placeholder)', () {
+  group('FileCredentialStore', () {
     late Directory tmp;
     setUp(() {
       tmp = Directory.systemTemp.createTempSync('dpgrabber_cred_test_');
@@ -13,9 +13,8 @@ void main() {
       tmp.deleteSync(recursive: true);
     });
 
-    test('save/load/clear roundtrip; reports insecure storage', () async {
+    test('save/load/clear roundtrip', () async {
       final store = FileCredentialStore(tmp);
-      expect(store.isSecureStorage, isFalse);
       expect(await store.loadAccount(), isNull);
       await store.saveAccount(phone: '13800000000', password: 'fake-pw');
       final loaded = await store.loadAccount();

@@ -142,6 +142,10 @@ void main() {
       );
       h.install();
       final engine = h.engine(testConfig());
+      // Confirm tasks need a live session (in
+      // production _run sets it before the poll
+      // loop); establish it first.
+      expect(await engine.refreshSession('13800000000', 'abc'), isTrue);
       // handleOrder drives the whole task: success is reported via
       // onGrab, and the duplicate success onOutcome is skipped (§1.6).
       final outcome = await engine.handleOrder(
@@ -162,6 +166,10 @@ void main() {
       );
       h.install();
       final engine = h.engine(testConfig());
+      // Confirm tasks need a live session (in
+      // production _run sets it before the poll
+      // loop); establish it first.
+      expect(await engine.refreshSession('13800000000', 'abc'), isTrue);
       final result = await engine.handleOrder(
           fakeOrder(), '15650502', '13800000000', 'abc');
       expect(result, ConfirmTaskOutcome.fail);
@@ -179,6 +187,10 @@ void main() {
       );
       h.install();
       final engine = h.engine(testConfig());
+      // Confirm tasks need a live session (in
+      // production _run sets it before the poll
+      // loop); establish it first.
+      expect(await engine.refreshSession('13800000000', 'abc'), isTrue);
       final result = await engine.handleOrder(
           fakeOrder(), '15650502', '13800000000', 'abc');
       expect(result, ConfirmTaskOutcome.busy);
@@ -198,6 +210,10 @@ void main() {
       );
       h.install();
       final engine = h.engine(testConfig());
+      // Confirm tasks need a live session (in
+      // production _run sets it before the poll
+      // loop); establish it first.
+      expect(await engine.refreshSession('13800000000', 'abc'), isTrue);
       final result = await engine.confirmTask(
           fakeOrder(), '15650502', '13800000000', 'abc');
       expect(result.outcome, ConfirmTaskOutcome.ok);
@@ -232,6 +248,10 @@ void main() {
             })));
       };
       final engine = h.engine(testConfig());
+      // Confirm tasks need a live session (in
+      // production _run sets it before the poll
+      // loop); establish it first.
+      expect(await engine.refreshSession('13800000000', 'abc'), isTrue);
       final result = await engine.confirmTask(
           fakeOrder(), '15650502', '13800000000', 'abc');
       expect(result.outcome, ConfirmTaskOutcome.ok);
@@ -249,6 +269,10 @@ void main() {
         throw const FakeNetworkError();
       };
       final engine = h.engine(testConfig());
+      // Confirm tasks need a live session (in
+      // production _run sets it before the poll
+      // loop); establish it first.
+      expect(await engine.refreshSession('13800000000', 'abc'), isTrue);
       final result = await engine.handleOrder(
           fakeOrder(), '15650502', '13800000000', 'abc');
       expect(result, ConfirmTaskOutcome.unknown);
@@ -274,6 +298,10 @@ void main() {
         randomConfirmFallbackSec: 0.15,
         confirmRetryDelaySec: 0.05,
       ));
+      // Confirm tasks need a live session (in
+      // production _run sets it before the poll
+      // loop); establish it first.
+      expect(await engine.refreshSession('13800000000', 'abc'), isTrue);
       final order = fakeOrder(createTime: 1700000000000);
       engine.markSeen('15650502');
       final result = await engine.handleOrder(
@@ -293,6 +321,10 @@ void main() {
             statusCode: 401, bodyBytes: utf8.encode('{}'));
       };
       final engine = h.engine(testConfig());
+      // Confirm tasks need a live session (in
+      // production _run sets it before the poll
+      // loop); establish it first.
+      expect(await engine.refreshSession('13800000000', 'abc'), isTrue);
       engine.markSeen('15650502');
       final result = await engine.handleOrder(
           fakeOrder(), '15650502', '13800000000', 'abc');
@@ -314,6 +346,10 @@ void main() {
         randomConfirmWindowSec: 5,
         randomConfirmFallbackSec: 5,
       ));
+      // Confirm tasks need a live session (in
+      // production _run sets it before the poll
+      // loop); establish it first.
+      expect(await engine.refreshSession('13800000000', 'abc'), isTrue);
       final future = engine.handleOrder(
           fakeOrder(), '15650502', '13800000000', 'abc');
       await Future.delayed(const Duration(milliseconds: 100));

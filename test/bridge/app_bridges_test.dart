@@ -1,5 +1,11 @@
 /// AppBridges wiring test: initialize with injected fakes, verify the
 /// pieces fit together and the engine onGrab hook posts a notification.
+///
+/// Credentials use the plain-file store on all platforms (same as the
+/// PC build): the platform secure store is namespaced by the signing
+/// identity, so a re-signed IPA cannot read items saved by a
+/// differently-signed build — there is no secure store to migrate
+/// from anymore.
 library;
 
 import 'dart:io';
@@ -9,11 +15,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:dpgrabber/bridge/app_bridges.dart';
 import 'package:dpgrabber/bridge/keep_alive.dart';
-import 'package:dpgrabber/bridge/secure_credential_store.dart';
 import 'package:dpgrabber/core/credential_store.dart';
 
 import 'local_notifications_test.dart' show FakeBackend;
-import 'secure_credential_store_test.dart' show MemoryBackend, FailingBackend;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -43,7 +47,6 @@ void main() {
 
     final backend = FakeBackend();
     final bridges = await AppBridges.initialize(
-      storageBackend: MemoryBackend(),
       configDirectory: dir,
       keepAliveChannel: channel,
       notificationBackend: backend,
@@ -51,11 +54,9 @@ void main() {
 
     // All platforms use the plain-file store: the secure store is
     // namespaced by the signing identity, and a re-signed IPA cannot
-    // read Keychain items saved by a differently-signed build, which
-    // surfaced as "logged out on second launch". See
-    // AppBridges.initialize for the one-time migration from it.
+    // read items saved by a differently-signed build, which surfaced
+    // as "logged out on second launch".
     expect(bridges.credentialStore, isA<FileCredentialStore>());
-    expect(bridges.credentialStore.isSecureStorage, isFalse);
     expect(backend.initialized, isTrue);
 
     // Credential round-trip through the wired store.
@@ -88,53 +89,5 @@ void main() {
     expect(backend.shown.single.title, '抢单成功');
 
     await bridges.stopBackgroundSupport();
-  });
-
-  test('initialize migrates a secure-store account once', () async {
-    final dir = await Directory.systemTemp.createTemp('dpgrabber_mig_');
-    addTearDown(() async {
-      if (await dir.exists()) await dir.delete(recursive: true);
-    });
-
-    // Simulate an older build: the account lives only in the secure
-    // store (in-memory backend here).
-    final legacyBackend = MemoryBackend();
-    final legacy = SecureCredentialStore(dir, backend: legacyBackend);
-    await legacy.saveAccount(phone: '13900000001', password: 'old-pw');
-
-    final bridges = await AppBridges.initialize(
-      storageBackend: legacyBackend,
-      configDirectory: dir,
-      notificationBackend: FakeBackend(),
-    );
-    expect(bridges.credentialStore, isA<FileCredentialStore>());
-    final migrated = await bridges.credentialStore.loadAccount();
-    expect(migrated?.phone, '13900000001');
-    expect(migrated?.password, 'old-pw');
-
-    // Second initialize with the same backends does not duplicate or
-    // overwrite: the file store already has the account, so the
-    // migration is a no-op.
-    final again = await AppBridges.initialize(
-      storageBackend: legacyBackend,
-      configDirectory: dir,
-      notificationBackend: FakeBackend(),
-    );
-    expect((await again.credentialStore.loadAccount())?.phone, '13900000001');
-  });
-
-  test('initialize with an unreadable secure store still starts', () async {
-    final dir = await Directory.systemTemp.createTemp('dpgrabber_mig2_');
-    addTearDown(() async {
-      if (await dir.exists()) await dir.delete(recursive: true);
-    });
-
-    final bridges = await AppBridges.initialize(
-      storageBackend: FailingBackend(),
-      configDirectory: dir,
-      notificationBackend: FakeBackend(),
-    );
-    expect(bridges.credentialStore, isA<FileCredentialStore>());
-    expect(await bridges.credentialStore.loadAccount(), isNull);
   });
 }

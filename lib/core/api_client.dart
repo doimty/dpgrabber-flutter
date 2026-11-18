@@ -39,7 +39,17 @@ class ApiClient {
   final bool verifyTls;
   final HttpTransport transport;
 
-  /// In-memory session only; never persisted, never logged.
+  /// In-memory session mirror only; never persisted, never logged.
+  ///
+  /// Single source of truth is [AppState.session] (see
+  /// `lib/ui/app_state.dart`): AppState syncs this field whenever it
+  /// sets its own session — that setter is the ONE sync point, and
+  /// nothing else writes this field. [request] deliberately does NOT
+  /// read it: every authenticated call must pass its session
+  /// explicitly, so a stale mirror can never be silently retried
+  /// (that silent retry is what surfaced as 401s with a live-looking
+  /// UI). The field is only read for display-ish lookups such as the
+  /// current shop id in the engine.
   Session? session;
 
   ApiClient({
@@ -165,8 +175,16 @@ class ApiClient {
       'Accept': '*/*',
       'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
     };
-    final useSession = session ?? this.session;
-    if (useSession != null && useSession.token.isNotEmpty) {
+    final useSession = session;
+    if (useSession == null) {
+      // No silent fallback to [this.session]: a call without an
+      // explicit session is a bug in the caller, and retrying with a
+      // possibly-stale mirror only produces confusing 401s. Callers
+      // that are genuinely unauthenticated (the login call) pass an
+      // explicit empty-token session instead.
+      throw const ApiError(ApiErrorKind.auth, 'no session: login required');
+    }
+    if (useSession.token.isNotEmpty) {
       headers['authorization-token'] = useSession.token;
       headers['sid'] = useSession.sid;
     }
@@ -335,7 +353,6 @@ class ApiClient {
       final (state, note) = await _probeShopPermission(candidate);
       onNote?.call('店铺 $sid：$note');
       if (state == 'confirmed') {
-        session = candidate;
         return candidate;
       }
       if (state == 'denied') continue;
@@ -343,7 +360,6 @@ class ApiClient {
     }
     if (fallback != null) {
       onNote?.call('没有确认到店员权限的店铺，沿用 sid=${fallback.sid}（权限未确认）');
-      session = fallback;
       return fallback;
     }
     throw ApiError(
@@ -422,18 +438,20 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> orderGet(String orderId,
-          {double timeoutSec = 15}) =>
+          {Session? session, double timeoutSec = 15}) =>
       request(
         'GET',
         '/s/c/order/get?id=${percentEncode(orderId)}',
+        session: session,
         timeoutSec: timeoutSec,
       );
 
   Future<Map<String, dynamic>> orderConfirm(String orderId,
-          {double timeoutSec = 10}) =>
+          {Session? session, double timeoutSec = 10}) =>
       request(
         'POST',
         '/s/c/order/confirm?id=${percentEncode(orderId)}',
+        session: session,
         timeoutSec: timeoutSec,
       );
 

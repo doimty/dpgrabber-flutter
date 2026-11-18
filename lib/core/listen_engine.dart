@@ -43,6 +43,13 @@ class ListenEngine {
   bool _running = false;
   bool _stopped = false;
   Clerk? _clerk;
+
+  /// The engine's working session, established by [_run] /
+  /// [refreshSession] and reported to AppState via [onSession]
+  /// (AppState is the single source of truth; this is the engine's
+  /// own copy so its poll/confirm calls can pass an explicit session
+  /// — the client never silently falls back to a mirror).
+  Session? _session;
   final Map<String, DateTime> _seen = {};
   int _consecutiveFailures = 0;
   bool _shapeLogged = false;
@@ -183,7 +190,7 @@ class ListenEngine {
   OrderFilter buildFilter() => OrderFilter.fromConfig(config);
 
   int? currentShopId() {
-    final sid = client.session?.sid;
+    final sid = _session?.sid ?? client.session?.sid;
     if (sid != null) {
       final parsed = int.tryParse(sid.trim());
       if (parsed != null) return parsed;
@@ -214,7 +221,7 @@ class ListenEngine {
       Session session;
       if (initialSession != null && initialSession.token.isNotEmpty) {
         session = initialSession;
-        client.session = session;
+        _session = session;
         log(LogLevel.info, '复用已登录会话，店铺 sid=${session.sid}');
       } else {
         log(LogLevel.info, '正在登录…');
@@ -223,6 +230,7 @@ class ListenEngine {
           password,
           preferredShopId: config.shopId,
         );
+        _session = session;
         log(LogLevel.success, '登录成功，店铺 sid=${session.sid}');
       }
       try {
@@ -256,6 +264,7 @@ class ListenEngine {
         password,
         preferredShopId: config.shopId,
       );
+      _session = session;
       log(LogLevel.success, '会话已重新建立，店铺 sid=${session.sid}');
       try {
         onSession?.call(session);
@@ -296,7 +305,7 @@ class ListenEngine {
       List<Map<String, dynamic>> orders;
       try {
         orders = await client.randomList(
-            pageSize: pageSize, timeoutSec: timeout);
+            pageSize: pageSize, timeoutSec: timeout, session: _session);
       } on ApiError catch (e) {
         if (e.kind == ApiErrorKind.auth) {
           log(LogLevel.warning, '登录态失效，尝试重新登录…');
@@ -430,7 +439,8 @@ class ListenEngine {
   Future<({ReconcileVerdict verdict, String reason})> readback(
       String orderId) async {
     try {
-      final response = await client.orderGet(orderId, timeoutSec: 15);
+      final response =
+          await client.orderGet(orderId, session: _session, timeoutSec: 15);
       return reconcileOrder(response, _ownClerkId());
     } on ApiError catch (e) {
       log(LogLevel.warning, '订单状态查询失败 id=$orderId：${e.message}');
@@ -483,7 +493,8 @@ class ListenEngine {
       Map<String, dynamic> result;
       try {
         confirmCalls += 1;
-        result = await client.orderConfirm(orderId, timeoutSec: timeout);
+        result = await client.orderConfirm(orderId,
+            session: _session, timeoutSec: timeout);
       } on ApiError catch (e) {
         if (e.kind == ApiErrorKind.auth) {
           releaseSeen(orderId);

@@ -4,8 +4,8 @@
 /// foreground service) and `ios/Runner/` (Swift silent-audio keep-alive).
 /// Nothing here touches `lib/core/` semantics; the bridges only *host* the
 /// core [ListenEngine] (keep it alive in the background) and *wire* its
-/// callbacks (grab success -> local notification, credentials -> secure
-/// storage).
+/// callbacks (grab success -> local notification, credentials -> the
+/// plain-file store, same as the PC build).
 ///
 /// Keep-alive decision (Q-13): hand-written `MethodChannel` + native
 /// service, NOT `flutter_foreground_task`. Rationale, see `keep_alive.dart`:
@@ -19,5 +19,4 @@ library;
 export 'app_bridges.dart';
 export 'keep_alive.dart';
 export 'local_notifications.dart';
-export 'secure_credential_store.dart';
 export 'windows_tray.dart';

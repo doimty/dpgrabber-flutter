@@ -7,10 +7,11 @@
 /// engine, history store, notifier and theme are all wired in
 /// [AppState]; this file only bootstraps it.
 ///
-/// Bridge wiring: keep-alive / secure storage / tray / local
-/// notifications come from `lib/bridge/` ([AppBridges]). Credentials
-/// use the bridge's secure store; the core's development-only file
-/// store is only the fallback when no store is passed in.
+/// Bridge wiring: keep-alive / tray / local notifications come from
+/// `lib/bridge/` ([AppBridges]). Credentials live in the plain-file
+/// store (same as the PC build) — the file store is the design, not
+/// a fallback; the platform secure store is namespaced by the signing
+/// identity and a re-signed IPA cannot read it.
 ///
 /// UI: the wenxi UI system (appTheme + ThemeExtension appearance +
 /// liquid glass) drives the MaterialApp; dpgrabber's own palette ids
