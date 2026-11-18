@@ -191,6 +191,304 @@ void main() {
     });
   });
 
+  group('add account (§10.2)', () {
+    /// A logged-in state with a stubbed login flow (same stubs as
+    /// the cold-start group): current account 138****0000, clerk
+    /// 加冰 / ID 230313, shop 92. All test data is fake.
+    Future<AppState> loggedInStubbedState(WidgetTester tester) async {
+      final state = (await tester.runAsync(() async {
+        final dir =
+            await Directory.systemTemp.createTemp('dpgrabber_add_acct_');
+        final transport = FakeTransport();
+        transport.onJson('/s/duopei-account/login', {
+          'code': 0,
+          'data': {'token': 'base-tok', 'shopId': 92},
+        });
+        transport.onJson('/s/duopei-account/list-shop-account', {
+          'code': 0,
+          'data': [
+            {'shopId': 92, 'accountId': 'a92'},
+          ],
+        });
+        transport.onJson('/s/duopei-account/switch-account',
+            {'code': 0, 'data': {'token': 'tok-92'}});
+        transport.onJson('/s/balance/getBalance', {'code': 0});
+        transport.onJson('/s/c/clerk/get', {
+          'code': 0,
+          'clerk': {'id': 230313, 'name': '加冰', 'status': 1},
+        });
+        transport.onJson('/s/c/clerk/getItemSwitchList',
+            {'code': 0, 'itemSwitchList': [], 'clerkItemSwitchIds': []});
+        await FileCredentialStore(dir)
+            .saveAccount(phone: '13800000000', password: 'fake-pw');
+        final s = AppState(appDir: dir, transport: transport);
+        await s.init();
+        for (var i = 0;
+            i < 100 && (s.session == null || s.clerk == null);
+            i++) {
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+        return (state: s, transport: transport);
+      }))!;
+      return state.state;
+    }
+
+    /// Tall viewport so the whole account card (identity + saved
+    /// rows + add row + expanded form) is on screen without
+    /// scrolling, like the redesign group does.
+    void tallViewport(WidgetTester tester) {
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
+
+    /// A logged-in state built from plain field assignment (no
+    /// transport needed — no login is attempted).
+    Future<AppState> loggedInFakeState(WidgetTester tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      state.loggedIn = true;
+      state.loginPhone = '13800000000';
+      state.clerk = const Clerk(id: 230313, name: '加冰', status: 1);
+      state.session = const Session(token: 'fake', sid: '92');
+      await tester.runAsync(
+        () => state.updateConfig(
+          state.config.copyWith(
+            clerkId: 230313,
+            clerkName: '加冰',
+            shopId: 92,
+          ),
+        ),
+      );
+      state.savedAccounts = [
+        {'phone': '13800000000', 'clerk_name': '加冰', 'shop': '92'},
+      ];
+      return state;
+    }
+
+    Future<void> openAddForm(WidgetTester tester) async {
+      await tester.tap(find.text('添加账号'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('添加一个新账号，登录成功后会保存并切换过去'),
+        findsOneWidget,
+      );
+      expect(
+        find.widgetWithText(TextField, '11 位手机号'),
+        findsOneWidget,
+      );
+    }
+
+    testWidgets('add row exists when logged in, form hidden until tapped',
+        (tester) async {
+      final state = await loggedInFakeState(tester);
+      tallViewport(tester);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      expect(find.text('添加账号'), findsOneWidget);
+      expect(find.byIcon(Icons.add), findsOneWidget);
+      // No add form yet — and no logged-out login form either.
+      expect(
+        find.widgetWithText(TextField, '11 位手机号'),
+        findsNothing,
+      );
+      expect(find.text('登录验证'), findsNothing);
+      // Same ListTile as the saved rows: zero contentPadding, same
+      // title style, same chevron.
+      final addTile = tester.widget<ListTile>(
+        find.ancestor(
+          of: find.text('添加账号'),
+          matching: find.byType(ListTile),
+        ),
+      );
+      expect(addTile.contentPadding, EdgeInsets.zero);
+      expect(
+        tester.widget<Text>(find.text('添加账号')).style,
+        tester
+            .widget<Text>(
+              find.text('加冰 · 138****0000 · 店 92'),
+            )
+            .style,
+      );
+      expect(
+        find.descendant(
+          of: find.ancestor(
+            of: find.text('添加账号'),
+            matching: find.byType(ListTile),
+          ),
+          matching: find.byIcon(Icons.chevron_right),
+        ),
+        findsOneWidget,
+      );
+      // Expand, then collapse again.
+      await openAddForm(tester);
+      expect(find.text('登录验证'), findsOneWidget);
+      await tester.tap(find.text('添加账号'));
+      await tester.pumpAndSettle();
+      expect(
+        find.widgetWithText(TextField, '11 位手机号'),
+        findsNothing,
+      );
+      expect(find.text('登录验证'), findsNothing);
+    });
+
+    testWidgets('no add row when logged out', (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      state.savedAccounts = [
+        {'phone': '13800000000', 'clerk_name': '加冰', 'shop': '92'},
+      ];
+      tallViewport(tester);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      expect(find.text('添加账号'), findsNothing);
+      expect(find.text('登录验证'), findsOneWidget);
+    });
+
+    testWidgets('invalid add input shows inline error, changes nothing',
+        (tester) async {
+      final state = await loggedInFakeState(tester);
+      tallViewport(tester);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      await openAddForm(tester);
+      // Empty submit first.
+      await tester.tap(find.text('登录验证'));
+      await tester.pump();
+      expect(find.text('请输入手机号'), findsOneWidget);
+      await tester.enterText(
+        find.widgetWithText(TextField, '11 位手机号'),
+        '1380000000',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextField, '账号密码'),
+        'x',
+      );
+      await tester.tap(find.text('登录验证'));
+      await tester.pump();
+      expect(find.text('手机号应为 11 位数字'), findsOneWidget);
+      // Nothing changed: still the old session, old saved list,
+      // form still open.
+      expect(state.session?.sid, '92');
+      expect(state.loginPhone, '13800000000');
+      expect(state.savedAccounts.length, 1);
+      expect(
+        find.widgetWithText(TextField, '11 位手机号'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('valid add appends to saved accounts and switches',
+        (tester) async {
+      final state = await loggedInStubbedState(tester);
+      addTearDown(state.dispose);
+      expect(state.session?.sid, '92');
+      expect(state.savedAccounts.length, 1);
+      tallViewport(tester);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      await openAddForm(tester);
+      await tester.enterText(
+        find.widgetWithText(TextField, '11 位手机号'),
+        '13900000001',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextField, '账号密码'),
+        'new-pw',
+      );
+      await tester.tap(find.text('登录验证'));
+      await tester.pumpAndSettle();
+      // Switched to the new account, old one kept.
+      expect(state.loginPhone, '13900000001');
+      expect(state.session, isNotNull);
+      expect(state.session!.sid, '92');
+      expect(state.savedAccounts.length, 2);
+      expect(
+        state.savedAccounts
+            .map((a) => (a['phone'] ?? '').toString())
+            .toSet(),
+        containsAll(['13800000000', '13900000001']),
+      );
+      // Form collapsed; card shows the new account; add row stays.
+      expect(
+        find.widgetWithText(TextField, '11 位手机号'),
+        findsNothing,
+      );
+      expect(find.text('139****0001'), findsOneWidget);
+      expect(find.text('添加账号'), findsOneWidget);
+    });
+
+    testWidgets('failed add leaves the current session untouched',
+        (tester) async {
+      final result = (await tester.runAsync(() async {
+        final dir =
+            await Directory.systemTemp.createTemp('dpgrabber_add_fail_');
+        final transport = FakeTransport();
+        transport.onJson('/s/duopei-account/login', {
+          'code': 0,
+          'data': {'token': 'base-tok', 'shopId': 92},
+        });
+        transport.onJson('/s/duopei-account/list-shop-account', {
+          'code': 0,
+          'data': [
+            {'shopId': 92, 'accountId': 'a92'},
+          ],
+        });
+        transport.onJson('/s/duopei-account/switch-account',
+            {'code': 0, 'data': {'token': 'tok-92'}});
+        transport.onJson('/s/balance/getBalance', {'code': 0});
+        transport.onJson('/s/c/clerk/get', {
+          'code': 0,
+          'clerk': {'id': 230313, 'name': '加冰', 'status': 1},
+        });
+        transport.onJson('/s/c/clerk/getItemSwitchList',
+            {'code': 0, 'itemSwitchList': [], 'clerkItemSwitchIds': []});
+        await FileCredentialStore(dir)
+            .saveAccount(phone: '13800000000', password: 'fake-pw');
+        final s = AppState(appDir: dir, transport: transport);
+        await s.init();
+        for (var i = 0;
+            i < 100 && (s.session == null || s.clerk == null);
+            i++) {
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+        return (state: s, transport: transport);
+      }))!;
+      final state = result.state;
+      addTearDown(state.dispose);
+      expect(state.session?.sid, '92');
+      // From here the login endpoint rejects: the add must fail.
+      result.transport.onJson('/s/duopei-account/login',
+          {'code': 401, 'msg': '密码错误'});
+      tallViewport(tester);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      await openAddForm(tester);
+      await tester.enterText(
+        find.widgetWithText(TextField, '11 位手机号'),
+        '13900000001',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextField, '账号密码'),
+        'wrong-pw',
+      );
+      await tester.tap(find.text('登录验证'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('登录失败'), findsOneWidget);
+      // Current session, identity and saved list all untouched;
+      // the form stays open for a retry.
+      expect(state.session?.sid, '92');
+      expect(state.loggedIn, isTrue);
+      expect(state.loginPhone, '13800000000');
+      expect(state.savedAccounts.length, 1);
+      expect(
+        find.widgetWithText(TextField, '11 位手机号'),
+        findsOneWidget,
+      );
+    });
+  });
+
   group('cold-start auto-login (§10.2, login-bug2 video sequence)', () {
     /// The transport of the last cold start built by
     /// [savedAccountState], so tests can count its requests.

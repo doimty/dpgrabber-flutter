@@ -8,7 +8,11 @@
 /// signed in across restarts (the app rebuilds the live session
 /// itself on cold start), and removing the account entirely is
 /// "清除已保存账号". Saved accounts live inside the same account card
-/// (divider + tappable rows), not as a separate section.
+/// (divider + tappable rows), not as a separate section. While logged
+/// in, a "+ 添加账号" row (same ListTile style as the saved rows)
+/// expands the same login form inline to add another account: a
+/// successful add saves the new credentials and switches the session
+/// to it; a failed add leaves the current session untouched.
 ///
 /// Saving is automatic (§10.4): every text field commits on submit /
 /// blur through [SettingsFieldCommitter] — full [AppConfig.fromJson]
@@ -85,6 +89,13 @@ class _SettingsPageState extends State<SettingsPage>
     with SettingsFieldPageState<SettingsPage> {
   late final TextEditingController _phoneController;
   late final TextEditingController _passwordController;
+  // The inline add-account form (logged-in card) has its own
+  // controllers: it must start empty, never prefilled with the
+  // current account's phone. The form UI itself is shared with the
+  // logged-out login form via [_loginForm].
+  late final TextEditingController _addPhoneController;
+  late final TextEditingController _addPasswordController;
+  bool _showAddAccount = false;
   bool _showPassword = false;
   bool _loggingIn = false;
   String? _loginError;
@@ -121,6 +132,8 @@ class _SettingsPageState extends State<SettingsPage>
     });
     _phoneController = TextEditingController(text: cfg.phone);
     _passwordController = TextEditingController();
+    _addPhoneController = TextEditingController();
+    _addPasswordController = TextEditingController();
   }
 
   static String _num(double v) =>
@@ -131,6 +144,8 @@ class _SettingsPageState extends State<SettingsPage>
     disposeFieldControllers();
     _phoneController.dispose();
     _passwordController.dispose();
+    _addPhoneController.dispose();
+    _addPasswordController.dispose();
     super.dispose();
   }
 
@@ -165,9 +180,12 @@ class _SettingsPageState extends State<SettingsPage>
 
   // -- account (§10.2: login lives in Settings) ----------------------
 
-  String? _validateLogin() {
-    final phone = _phoneController.text.trim();
-    final password = _passwordController.text;
+  String? _validateLogin(
+    TextEditingController phoneController,
+    TextEditingController passwordController,
+  ) {
+    final phone = phoneController.text.trim();
+    final password = passwordController.text;
     if (phone.isEmpty) return '请输入手机号';
     if (password.isEmpty) return '请输入密码';
     final digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
@@ -175,8 +193,23 @@ class _SettingsPageState extends State<SettingsPage>
     return null;
   }
 
-  Future<void> _login() async {
-    final problem = _validateLogin();
+  /// Log in with the typed credentials. [isAdd] selects the inline
+  /// add-account form (logged-in card) instead of the logged-out
+  /// form; both share validation, the inline error and this flow.
+  /// A failed login throws inside [AppState.login] before any
+  /// session/credential mutation, so the current session and the
+  /// saved accounts survive a failed add untouched. On success the
+  /// new account is saved and becomes the live session; the add
+  /// form collapses. Listening is stopped first when adding (the
+  /// engine must not keep polling on the old session); the
+  /// logged-out path can never be listening, so this is a no-op
+  /// there.
+  Future<void> _login({bool isAdd = false}) async {
+    final phoneController =
+        isAdd ? _addPhoneController : _phoneController;
+    final passwordController =
+        isAdd ? _addPasswordController : _passwordController;
+    final problem = _validateLogin(phoneController, passwordController);
     if (problem != null) {
       setState(() => _loginError = problem);
       return;
@@ -186,11 +219,16 @@ class _SettingsPageState extends State<SettingsPage>
       _loginError = null;
     });
     try {
+      if (_state.listening) _state.stopListening();
       await _state.login(
-        _phoneController.text.trim(),
-        _passwordController.text,
+        phoneController.text.trim(),
+        passwordController.text,
       );
-      _passwordController.clear();
+      passwordController.clear();
+      if (isAdd) {
+        phoneController.clear();
+        if (mounted) setState(() => _showAddAccount = false);
+      }
     } on ApiError catch (e) {
       setState(() => _loginError = '登录失败：${e.message}');
     } catch (e) {
@@ -198,6 +236,103 @@ class _SettingsPageState extends State<SettingsPage>
     } finally {
       if (mounted) setState(() => _loggingIn = false);
     }
+  }
+
+  void _toggleAddAccount() {
+    setState(() {
+      _showAddAccount = !_showAddAccount;
+      if (_showAddAccount) {
+        _loginError = null;
+        _addPhoneController.clear();
+        _addPasswordController.clear();
+      }
+    });
+  }
+
+  /// The login form, shared by the logged-out state and the inline
+  /// add-account form: same fields, same button, same spacing
+  /// (8/12/16 rhythm). Only the controllers, the header/hint copy
+  /// and the submit path differ. The error itself is shown once,
+  /// above the card ([ErrorBanner] on [_loginError]).
+  Widget _loginForm({
+    required TextEditingController phoneController,
+    required TextEditingController passwordController,
+    required Future<void> Function() onSubmit,
+    required String header,
+    required String submitHint,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          header,
+          style: TextStyle(
+            color: _state.theme.palette.hint,
+            fontSize: 13,
+          ),
+        ),
+        const SizedBox(height: 8),
+        LabeledField(
+          label: '手机号',
+          controller: phoneController,
+          hint: '11 位手机号',
+          keyboardType: TextInputType.phone,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(11),
+          ],
+        ),
+        LabeledField(
+          label: '密码',
+          controller: passwordController,
+          hint: '账号密码',
+          obscureText: !_showPassword,
+          suffixIcon: IconButton(
+            tooltip: _showPassword ? '隐藏密码' : '显示密码',
+            onPressed: () => setState(
+              () => _showPassword = !_showPassword,
+            ),
+            icon: Icon(
+              _showPassword ? Icons.visibility_off : Icons.visibility,
+              color: _state.theme.palette.hint,
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        LiquidGlassButton(
+          onPressed: _loggingIn ? null : onSubmit,
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(
+              vertical: 14,
+            ),
+          ),
+          child: _loggingIn
+              ? const SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text(
+                  '登录验证',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _loggingIn ? '正在登录…' : submitHint,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: _state.theme.palette.hint,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
   }
 
   Future<void> _switchTo(String phone) async {
@@ -335,83 +470,17 @@ class _SettingsPageState extends State<SettingsPage>
                         ],
                       )
                     else
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            _state.config.phone.isEmpty
-                                ? '还没有账号配置，登录后会自动建档'
-                                : '将登录 ${maskPhone(_state.config.phone)}',
-                            style: TextStyle(
-                              color: palette.hint,
-                              fontSize: 13,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          LabeledField(
-                            label: '手机号',
-                            controller: _phoneController,
-                            hint: '11 位手机号',
-                            keyboardType: TextInputType.phone,
-                            inputFormatters: [
-                              FilteringTextInputFormatter.digitsOnly,
-                              LengthLimitingTextInputFormatter(11),
-                            ],
-                          ),
-                          LabeledField(
-                            label: '密码',
-                            controller: _passwordController,
-                            hint: '账号密码',
-                            obscureText: !_showPassword,
-                            suffixIcon: IconButton(
-                              tooltip: _showPassword ? '隐藏密码' : '显示密码',
-                              onPressed: () => setState(
-                                () => _showPassword = !_showPassword,
-                              ),
-                              icon: Icon(
-                                _showPassword
-                                    ? Icons.visibility_off
-                                    : Icons.visibility,
-                                color: palette.hint,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          LiquidGlassButton(
-                            onPressed: _loggingIn ? null : _login,
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 14,
-                              ),
-                            ),
-                            child: _loggingIn
-                                ? const SizedBox(
-                                    height: 18,
-                                    width: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Text(
-                                    '登录验证',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _loggingIn ? '正在登录…' : '请输入手机号和密码后登录',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: palette.hint,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
+                      _loginForm(
+                        phoneController: _phoneController,
+                        passwordController: _passwordController,
+                        onSubmit: () => _login(),
+                        header: _state.config.phone.isEmpty
+                            ? '还没有账号配置，登录后会自动建档'
+                            : '将登录 ${maskPhone(_state.config.phone)}',
+                        submitHint: '请输入手机号和密码后登录',
                       ),
-                    if (_state.savedAccounts.isNotEmpty) ...[
+                    if (_state.savedAccounts.isNotEmpty ||
+                        _state.loggedIn) ...[
                       const Divider(height: 24),
                       for (final account in _state.savedAccounts)
                         ListTile(
@@ -427,16 +496,49 @@ class _SettingsPageState extends State<SettingsPage>
                                     (account['phone'] ?? '').toString(),
                                   ),
                         ),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: _clearSaved,
-                          child: Text(
-                            '清除已保存账号',
-                            style: TextStyle(color: palette.logError),
+                      // Add-account entry (logged in only): the same
+                      // ListTile as the saved rows — zero
+                      // contentPadding, same title style, same
+                      // chevron — with a plain system plus icon as
+                      // the only difference, in the title colour
+                      // (no accent/fancy colour). Tapping expands
+                      // the shared login form inline below.
+                      if (_state.loggedIn)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            Icons.add,
+                            color: palette.textDark,
+                          ),
+                          title: Text(
+                            '添加账号',
+                            style: TextStyle(color: palette.textDark),
+                          ),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap:
+                              _loggingIn ? null : _toggleAddAccount,
+                        ),
+                      if (_showAddAccount) ...[
+                        const Divider(height: 24),
+                        _loginForm(
+                          phoneController: _addPhoneController,
+                          passwordController: _addPasswordController,
+                          onSubmit: () => _login(isAdd: true),
+                          header: '添加一个新账号，登录成功后会保存并切换过去',
+                          submitHint: '请输入新账号的手机号和密码',
+                        ),
+                      ],
+                      if (_state.savedAccounts.isNotEmpty)
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: _clearSaved,
+                            child: Text(
+                              '清除已保存账号',
+                              style: TextStyle(color: palette.logError),
+                            ),
                           ),
                         ),
-                      ),
                     ],
                   ],
                 ),
