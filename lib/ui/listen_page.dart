@@ -89,9 +89,7 @@ class _ListenPageState extends State<ListenPage> {
         final listenLabel = _state.listening
             ? '监听中'
             : (last == null ? '未开始监听' : '已停止');
-        final loginLabel = _state.session == null
-            ? '未登录'
-            : '店铺 ${_state.session!.sid}';
+        final loginLabel = _loginLabel(_state);
         return Scaffold(
           appBar: AppBar(title: const Text('监听')),
           body: ListView(
@@ -529,4 +527,27 @@ class _LogView extends StatelessWidget {
 AppPalette _palette(BuildContext context) {
   final scope = context.dependOnInheritedWidgetOfExactType<AppStateScope>();
   return scope!.state.theme.palette;
+}
+
+/// Hero login label: `店铺 {sid} · {clerkName}` once the live session
+/// exists. While the session is being rebuilt, the cached identity
+/// (config.shopId / config.clerkName) shows with a weak "同步中…"
+/// state — never presented as logged-in: shopId 0 means auto (no
+/// number to show), and the fallback may land on a non-preferred
+/// shop. Genuinely logged out (or a finished, failed restore) reads
+/// "未登录". The clerk name is the display name — the API has no
+/// separate shop-name field.
+String _loginLabel(AppState state) {
+  final name = state.clerk?.name ?? state.config.clerkName;
+  final namePart = name.isEmpty ? '' : ' · $name';
+  final session = state.session;
+  if (session != null) return '店铺 ${session.sid}$namePart';
+  if (state.loggedIn && state.sessionRestoring) {
+    if (state.config.shopId > 0) {
+      return '店铺 ${state.config.shopId}$namePart · 同步中…';
+    }
+    if (name.isNotEmpty) return '$name · 同步中…';
+    return '同步中…';
+  }
+  return '未登录';
 }

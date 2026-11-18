@@ -10,12 +10,15 @@ import 'package:dpgrabber/main.dart';
 import 'package:dpgrabber/theme/app_theme.dart';
 import 'package:dpgrabber/theme/glass.dart';
 import 'package:dpgrabber/theme/palette.dart';
+import 'package:dpgrabber/ui/advanced_settings_page.dart';
 import 'package:dpgrabber/ui/app_state.dart';
 import 'package:dpgrabber/ui/history_page.dart';
 import 'package:dpgrabber/ui/listen_page.dart';
 import 'package:dpgrabber/ui/log_store.dart';
 import 'package:dpgrabber/ui/navigation.dart';
 import 'package:dpgrabber/ui/settings_page.dart';
+import 'package:dpgrabber/ui/widgets.dart';
+import 'package:dpgrabber/wenxi_ui/app_switch.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -177,8 +180,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('加冰'), findsOneWidget);
       expect(find.text('138****0000'), findsOneWidget);
-      expect(find.text('店铺 92'), findsOneWidget);
-      expect(find.text('ID：230313'), findsOneWidget);
+      // Merged shop line: one row, cached values, never blank.
+      expect(find.text('店铺 92 · ID 230313'), findsOneWidget);
+      expect(find.text('店铺 92'), findsNothing);
+      expect(find.text('ID：230313'), findsNothing);
       expect(find.text('登录验证'), findsNothing);
       // No way back to "logged out with a saved account": the
       // account stays signed in until its credentials are cleared.
@@ -187,6 +192,10 @@ void main() {
   });
 
   group('cold-start auto-login (§10.2, login-bug2 video sequence)', () {
+    /// The transport of the last cold start built by
+    /// [savedAccountState], so tests can count its requests.
+    FakeTransport? lastTransport;
+
     /// A state with a saved account + a stubbed login flow, as the
     /// video showed it: phone 138****0000, clerk 加冰 / ID 230313,
     /// shop 92, week stats 3 orders at a 25.0% renewal rate.
@@ -194,6 +203,7 @@ void main() {
       final dir =
           await Directory.systemTemp.createTemp('dpgrabber_login_bug2_');
       final transport = FakeTransport();
+      lastTransport = transport;
       transport.onJson('/s/duopei-account/login', {
         'code': 0,
         'data': {'token': 'base-tok', 'shopId': 92},
@@ -251,11 +261,12 @@ void main() {
       expect(state.session, isNotNull);
       expect(state.session!.sid, '92');
       expect(state.clerk?.name, '加冰');
+      expect(state.config.clerkId, 230313);
       expect(state.online, isTrue);
 
       await tester.pumpWidget(_wrap(state, ListenPage(state: state)));
       await tester.pumpAndSettle();
-      expect(find.textContaining('店铺 92'), findsOneWidget);
+      expect(find.textContaining('店铺 92 · 加冰'), findsOneWidget);
       expect(find.text('未登录'), findsNothing);
 
       // Week stats after the cold start: the call carries the
@@ -330,6 +341,44 @@ void main() {
       );
     });
 
+    testWidgets('week stats refresh automatically after the cold-start restore',
+        (tester) async {
+      final state = (await tester.runAsync(savedAccountState))!;
+      addTearDown(state.dispose);
+      // The background restore ends with a stats refresh: wait for
+      // it instead of calling refreshWeekStats ourselves.
+      for (var i = 0; i < 100 && state.weekStats == null; i++) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+      expect(state.weekStats, isNotNull);
+      expect(state.weekStats!.orderCount, 3);
+      expect(state.weekStats!.renewalRate, 25.0);
+    });
+
+    testWidgets('concurrent ensureSession calls run the login chain once',
+        (tester) async {
+      final state = (await tester.runAsync(savedAccountState))!;
+      addTearDown(state.dispose);
+      final transport = lastTransport!;
+      int loginCalls() => transport.requests
+          .where((r) => r.url.path.contains('/s/duopei-account/login'))
+          .length;
+      expect(state.session, isNotNull);
+      final before = loginCalls();
+      // Drop the session, then ask for it from three places at once.
+      state.session = null;
+      final results = await tester.runAsync(
+        () => Future.wait([
+          state.ensureSession(),
+          state.ensureSession(),
+          state.ensureSession(),
+        ]),
+      );
+      expect(results, [true, true, true]);
+      expect(state.session, isNotNull);
+      expect(loginCalls() - before, 1);
+    });
+
     testWidgets('ensureSession fails cleanly with no saved credentials',
         (tester) async {
       final state = await _testStateWith(tester);
@@ -376,7 +425,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('账号'), findsOneWidget);
       expect(find.text('接单条件'), findsWidgets);
-      expect(find.text('保存设置'), findsWidgets);
+      expect(find.text('保存设置'), findsNothing);
     });
   });
 
@@ -437,17 +486,18 @@ void main() {
         '接单条件',
         '确认等待',
         '刷新与休息',
+        '监听行为',
         '高级设置',
-        '接单类型匹配词',
-        '抢单推送',
-        'AES 密钥（十六进制）',
       ]) {
         await scrollTo(find.text(title));
         expect(find.text(title), findsOneWidget);
       }
-      await scrollTo(find.text('保存设置'));
-      expect(find.text('保存设置'), findsWidgets);
-      expect(find.text('保存设置'), findsWidgets);
+      // No save button anywhere, no AES section, and the advanced
+      // fields are not on the main page.
+      expect(find.text('保存设置'), findsNothing);
+      expect(find.text('AES 密钥（十六进制）'), findsNothing);
+      expect(find.text('优先店铺（0=自动）'), findsNothing);
+      expect(find.text('推送密钥'), findsNothing);
       // Stored values are untouched: the fixed theme/glass/background
       // still come from the saved config, not from any UI.
       expect(state.config.theme, 'day');
@@ -457,7 +507,8 @@ void main() {
       expect(state.background.settings.brightness, 0.90);
     });
 
-    testWidgets('invalid number is rejected on save', (tester) async {
+    testWidgets('invalid number is rejected per-field with an inline error',
+        (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
       // Enlarge the viewport so the lazily-built order-condition card
@@ -470,11 +521,214 @@ void main() {
       await tester.pumpAndSettle();
       final field = find.widgetWithText(TextField, '不低于此价才抢');
       await tester.enterText(field, 'abc');
-      await tester.tap(find.text('保存设置').first);
+      await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pumpAndSettle();
-      expect(find.textContaining('设置有误'), findsOneWidget);
-      // Config unchanged after a rejected save.
+      expect(find.text('最小金额 必须是数字'), findsOneWidget);
+      // Config unchanged after a rejected commit; the typed text
+      // stays visible (never swallowed).
       expect(state.config.minAmount, 10.0);
+      expect(
+        tester.widget<TextField>(field).controller?.text,
+        'abc',
+      );
+    });
+
+    testWidgets('cross-field rule is rejected on the offending field',
+        (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      // Minimum is 10 (default): a maximum of 5 breaks max >= min.
+      await tester.enterText(
+        find.widgetWithText(TextField, '填 0 不限制'),
+        '5',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(
+        find.text('最大金额不能小于最小金额（填 0 不限制）'),
+        findsOneWidget,
+      );
+      expect(state.config.maxAmount, 0.0);
+    });
+
+    testWidgets('valid number commits on submit', (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextField, '不低于此价才抢'),
+        '20',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(state.config.minAmount, 20.0);
+      expect(find.text('最小金额 必须是数字'), findsNothing);
+    });
+  });
+
+  group('settings redesign: auto-save + split (§10.4/§10.5)', () {
+    /// The AppSwitch belonging to the SwitchRow labelled [label].
+    Finder switchFor(String label) => find.descendant(
+          of: find.ancestor(
+            of: find.text(label),
+            matching: find.byType(SwitchRow),
+          ),
+          matching: find.byType(AppSwitch),
+        );
+
+    test('main and advanced field sets are disjoint, AES nowhere', () {
+      final overlap = SettingsPage.fieldKeys
+          .toSet()
+          .intersection(AdvancedSettingsPage.fieldKeys.toSet());
+      expect(overlap, isEmpty);
+      for (final key in [
+        ...SettingsPage.fieldKeys,
+        ...AdvancedSettingsPage.fieldKeys,
+      ]) {
+        expect(key, isNot(startsWith('aes')));
+      }
+    });
+
+    testWidgets('switch toggle does not discard uncommitted textbox input',
+        (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      // Type a new minimum amount, then tap a switch without
+      // submitting first: the blur commit must land before the
+      // switch's own updateConfig, so the value survives (this is
+      // the old display-vs-engine desync bug).
+      final field = find.widgetWithText(TextField, '不低于此价才抢');
+      await tester.enterText(field, '20');
+      // Blur-commit, driven through the field's real Focus node:
+      // taps never acquire focus in this test environment (verified
+      // with a bare-TextField probe), so the node is focused and
+      // unfocused programmatically. The unfocus fires the same
+      // onSubmitted callback a tap-away fires on a real device.
+      final node = Focus.of(tester.element(field));
+      node.requestFocus();
+      await tester.pump();
+      node.unfocus();
+      await tester.pumpAndSettle();
+      expect(state.config.minAmount, 20.0);
+      await tester.ensureVisible(switchFor('语音播报'));
+      await tester.tap(switchFor('语音播报'));
+      await tester.pumpAndSettle();
+      expect(state.config.minAmount, 20.0);
+      expect(state.config.voiceEnabled, isFalse);
+    });
+
+    testWidgets('advanced page holds the advanced fields', (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      expect(find.text('优先店铺（0=自动）'), findsNothing);
+      expect(find.text('推送密钥'), findsNothing);
+      // The advanced entry is at the bottom of the main page.
+      for (var i = 0; i < 30; i++) {
+        if (find.text('高级设置').evaluate().isNotEmpty) break;
+        await tester.drag(find.byType(ListView), const Offset(0, -400));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.text('高级设置'));
+      await tester.pumpAndSettle();
+      expect(find.text('优先店铺（0=自动）'), findsOneWidget);
+      expect(find.text('抢单推送'), findsOneWidget);
+      expect(find.text('接单类型匹配词'), findsOneWidget);
+      expect(find.text('保存设置'), findsNothing);
+      expect(find.text('AES 密钥（十六进制）'), findsNothing);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.text('接单条件'), findsWidgets);
+    });
+
+    testWidgets(
+        'logged-in account card shows merged shop line, saved accounts folded in',
+        (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      state.loggedIn = true;
+      state.loginPhone = '13800000000';
+      state.clerk = const Clerk(id: 230313, name: '加冰', status: 1);
+      state.session = const Session(token: 'fake', sid: '92');
+      await state.updateConfig(
+        state.config.copyWith(clerkId: 230313, clerkName: '加冰', shopId: 92),
+      );
+      state.savedAccounts = [
+        {'phone': '13800000000', 'clerk_name': '加冰', 'shop': '92'},
+      ];
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      // Title 17/w600, merged shop line, phone line.
+      expect(find.text('加冰'), findsOneWidget);
+      expect(tester.widget<Text>(find.text('加冰')).style?.fontSize, 17);
+      expect(find.text('店铺 92 · ID 230313'), findsOneWidget);
+      expect(find.text('138****0000'), findsOneWidget);
+      // Saved accounts live inside the account card now — no
+      // separate section title.
+      expect(find.text('已保存账号'), findsNothing);
+      expect(find.text('加冰 · 138****0000 · 店 92'), findsOneWidget);
+      expect(find.text('清除已保存账号'), findsOneWidget);
+    });
+
+    testWidgets(
+        'account card keeps the shop line from cache while the session is rebuilding',
+        (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      await state.updateConfig(state.config.copyWith(
+        shopId: 92,
+        clerkId: 230313,
+        clerkName: '加冰',
+      ));
+      state.loggedIn = true;
+      state.loginPhone = '13800000000';
+      // No session, no clerk object: everything comes from cache.
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      expect(find.text('加冰'), findsOneWidget);
+      expect(find.text('店铺 92 · ID 230313'), findsOneWidget);
+      expect(find.text('138****0000'), findsOneWidget);
+    });
+
+    testWidgets('listen hero shows cached identity while restoring',
+        (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      await state.updateConfig(
+        state.config.copyWith(shopId: 92, clerkName: '加冰'),
+      );
+      state.loggedIn = true;
+      state.loginPhone = '13800000000';
+      state.sessionRestoring = true;
+      await tester.pumpWidget(_wrap(state, ListenPage(state: state)));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('店铺 92 · 加冰 · 同步中…'),
+        findsOneWidget,
+      );
+      expect(find.text('未登录'), findsNothing);
     });
   });
 

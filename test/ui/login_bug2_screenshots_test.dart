@@ -92,7 +92,7 @@ void main() {
     ));
     await _capture(tester, key, 'settings-phone-logged-in.png');
     expect(find.text('加冰'), findsOneWidget);
-    expect(find.text('店铺 92'), findsOneWidget);
+    expect(find.text('店铺 92 · ID 230313'), findsOneWidget);
     expect(find.text('退出登录'), findsNothing);
   }, skip: true);
 }

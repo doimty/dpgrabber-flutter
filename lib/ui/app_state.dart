@@ -86,6 +86,13 @@ class AppState extends ChangeNotifier {
   Clerk? clerk;
   bool initialized = false;
   bool loggedIn = false;
+
+  /// True while a session rebuild is in flight (cold-start restore,
+  /// or any [ensureSession] that actually runs the login chain).
+  /// The listen hero shows the cached shop identity with a weak
+  /// "同步中…" state while this is true — never as logged-in.
+  bool sessionRestoring = false;
+  Future<bool>? _sessionFuture;
   String? loginPhone;
   String? _password; // in-memory only, never persisted by this class
   bool online = false;
@@ -303,8 +310,15 @@ class AppState extends ChangeNotifier {
   /// authenticated entry calls this first when [session] is null.
   /// Returns false when there are no saved credentials or the login
   /// fails; never clears the saved account, never throws.
+  ///
+  /// Concurrent callers share one in-flight login chain
+  /// ([_sessionFuture]): the background restore, the stats
+  /// auto-refresh and start-listening must not each run the full
+  /// 6–7 request chain.
   Future<bool> ensureSession() async {
     if (session != null) return true;
+    final inFlight = _sessionFuture;
+    if (inFlight != null) return inFlight;
     final phone = loginPhone;
     final password = _password;
     if (phone == null ||
@@ -313,6 +327,18 @@ class AppState extends ChangeNotifier {
         password.isEmpty) {
       return false;
     }
+    final future = _ensureSessionLocked(phone, password);
+    _sessionFuture = future;
+    try {
+      return await future;
+    } finally {
+      if (_sessionFuture == future) _sessionFuture = null;
+    }
+  }
+
+  Future<bool> _ensureSessionLocked(String phone, String password) async {
+    sessionRestoring = true;
+    notifyListeners();
     try {
       final s = await client.sessionForAccount(
         phone,
@@ -326,16 +352,22 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       logs.add(LogLevel.warning, '自动登录失败：$e');
       return false;
+    } finally {
+      sessionRestoring = false;
+      notifyListeners();
     }
   }
 
   /// Cold-start restore (§10.2): after [init] restores the saved
   /// account, rebuild the live session in the background (never
   /// blocks the shell), then refresh clerk info + item switches so
-  /// the listen page is fully live without a manual login.
+  /// the listen page is fully live without a manual login, then
+  /// refresh the week stats once (the manual button stays as a
+  /// retry).
   Future<void> _restoreSessionInBackground() async {
     if (!await ensureSession()) return;
     await _refreshClerkAndSwitches();
+    unawaited(refreshWeekStats());
   }
 
   /// Download and cache the clerk avatar (DPPP `_fetch_avatar`):
@@ -376,55 +408,103 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Refresh clerk info + item switches after a (re)login. The two
+  /// fetches run concurrently (both need only the session), but the
+  /// results are merged into ONE config update + ONE save afterwards:
+  /// each fetch's `copyWith` starts from the same config, so writing
+  /// them separately would let the later write clobber the earlier
+  /// field update.
   Future<void> _refreshClerkAndSwitches() async {
+    final results = await Future.wait([
+      _fetchClerk(),
+      _fetchItemSwitches(),
+    ]);
+    final clerkData = results[0] as ({Clerk? clerk, bool online})?;
+    final switchData =
+        results[1] as ({Map<int, String> names, List<int> ids})?;
+    var next = config;
+    var changed = false;
+    if (clerkData != null) {
+      clerk = clerkData.clerk;
+      online = clerkData.online;
+      final found = clerkData.clerk;
+      if (found != null && found.id > 0) {
+        unawaited(_refreshAvatar(found));
+        final name = found.name ?? config.clerkName;
+        if (name != config.clerkName || found.id != config.clerkId) {
+          next = next.copyWith(clerkName: name, clerkId: found.id);
+          changed = true;
+        }
+      }
+    }
+    if (switchData != null) {
+      itemSwitchNames = switchData.names;
+      itemSwitchIds = switchData.ids;
+      itemSwitchKnown = true;
+      next = next.copyWith(
+        itemSwitchIds: switchData.ids,
+        itemSwitchKnown: true,
+        itemSwitchNames: {
+          for (final e in switchData.names.entries)
+            e.key.toString(): e.value,
+        },
+      );
+      changed = true;
+    }
+    if (changed) {
+      config = next;
+      await saveConfig();
+    }
+    notifyListeners();
+  }
+
+  /// Fetch the clerk (reusing the login probe's clerk/get response
+  /// when it was captured for this session, so a cold start does not
+  /// call clerk/get twice). Returns null on failure (logged).
+  Future<({Clerk? clerk, bool online})?> _fetchClerk() async {
+    final s = session;
+    if (s == null) return null;
     try {
-      final raw = await client.clerkGet(session: session);
-      clerk = extractClerk(raw);
+      final raw =
+          client.takeCachedClerkRaw(s) ?? await client.clerkGet(session: s);
+      final found = extractClerk(raw);
       // Sync the real online state from the platform (1 online /
       // 2 offline), exactly like DPPP's _fetch_clerk_state ->
       // _set_online_text(status == 1). Without this the switch always
       // showed "当前离线" after login regardless of the real state.
-      online = (clerk?.status ?? 0) == 1;
-      if (clerk != null && clerk!.id > 0) {
-        unawaited(_refreshAvatar(clerk!));
-        config = config.copyWith(clerkName: clerk!.name ?? config.clerkName);
-        await saveConfig();
-      }
+      return (clerk: found, online: (found?.status ?? 0) == 1);
     } catch (e) {
       logs.add(LogLevel.warning, '店员信息读取失败，不影响监听：$e');
+      return null;
     }
+  }
+
+  /// Fetch the item-type switch list. Returns null on failure
+  /// (logged); an empty-but-successful response still counts as
+  /// known, exactly like the old sequential code.
+  Future<({Map<int, String> names, List<int> ids})?>
+      _fetchItemSwitches() async {
     try {
       final raw = await client.itemSwitchList(session: session);
       final list = raw['itemSwitchList'];
       final enabled = raw['clerkItemSwitchIds'];
-      if (list is List) {
-        itemSwitchNames = {
+      final names = <int, String>{
+        if (list is List)
           for (final item in list)
             if (item is Map && item['id'] is num)
               (item['id'] as num).toInt():
                   (item['name'] ?? '').toString(),
-        };
-      }
-      if (enabled is List) {
-        itemSwitchIds = [
+      };
+      final ids = <int>[
+        if (enabled is List)
           for (final v in enabled)
             if (v is num) v.toInt(),
-        ];
-      }
-      itemSwitchKnown = true;
-      config = config.copyWith(
-        itemSwitchIds: itemSwitchIds,
-        itemSwitchKnown: true,
-        itemSwitchNames: {
-          for (final e in itemSwitchNames.entries)
-            e.key.toString(): e.value,
-        },
-      );
-      await saveConfig();
+      ];
+      return (names: names, ids: ids);
     } catch (e) {
       logs.add(LogLevel.warning, '接单类型列表拉取失败：$e');
+      return null;
     }
-    notifyListeners();
   }
 
   /// Switch to a saved account: loads its config + credentials and

@@ -107,6 +107,12 @@ class OutcomeChip extends StatelessWidget {
 
 /// A labelled text field (label + hint + units in the label, per the
 /// PC UI rule that every field states its purpose and units).
+///
+/// Auto-save commit: [onSubmitted] fires both when the user submits
+/// (keyboard Done) and when the field loses focus (tap elsewhere) —
+/// never per keystroke, so intermediate text (`""` → `"0"` → `"0."`)
+/// is never written. [errorText] shows an inline validation error
+/// under the field.
 class LabeledField extends StatelessWidget {
   final String label;
   final TextEditingController controller;
@@ -117,6 +123,8 @@ class LabeledField extends StatelessWidget {
   final bool enabled;
   final List<TextInputFormatter>? inputFormatters;
   final void Function(String)? onChanged;
+  final void Function(String)? onSubmitted;
+  final String? errorText;
   final Widget? suffixIcon;
 
   const LabeledField({
@@ -130,6 +138,8 @@ class LabeledField extends StatelessWidget {
     this.enabled = true,
     this.inputFormatters,
     this.onChanged,
+    this.onSubmitted,
+    this.errorText,
     this.suffixIcon,
   });
 
@@ -143,20 +153,33 @@ class LabeledField extends StatelessWidget {
         children: [
           Text(label, style: TextStyle(color: palette.textDark, fontSize: 13)),
           const SizedBox(height: 4),
-          TextField(
-            controller: controller,
-            keyboardType: keyboardType,
-            obscureText: obscureText,
-            maxLines: maxLines,
-            minLines: maxLines > 1 ? 3 : null,
-            enabled: enabled,
-            inputFormatters: inputFormatters,
-            onChanged: onChanged,
-            decoration: InputDecoration(
-              hintText: hint,
-              suffixIcon: suffixIcon,
+          Focus(
+            // Blur commits: the Focus ancestor loses focus when the
+            // inner TextField does (tap outside, switch toggle, ...).
+            onFocusChange: (hasFocus) {
+              if (!hasFocus) onSubmitted?.call(controller.text);
+            },
+            child: TextField(
+              controller: controller,
+              keyboardType: keyboardType,
+              obscureText: obscureText,
+              maxLines: maxLines,
+              minLines: maxLines > 1 ? 3 : null,
+              enabled: enabled,
+              inputFormatters: inputFormatters,
+              onChanged: onChanged,
+              onSubmitted: onSubmitted,
+              decoration: InputDecoration(
+                hintText: hint,
+                suffixIcon: suffixIcon,
+                errorText: errorText,
+                errorStyle: TextStyle(
+                  color: palette.logError,
+                  fontSize: 12,
+                ),
+              ),
+              style: TextStyle(color: palette.textDark),
             ),
-            style: TextStyle(color: palette.textDark),
           ),
         ],
       ),

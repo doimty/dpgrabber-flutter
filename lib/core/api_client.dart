@@ -274,6 +274,21 @@ class ApiClient {
     return Session(token: token, sid: sid);
   }
 
+  /// Raw clerk/get response captured during the permission probe,
+  /// keyed by the candidate session object (identity). A cold start
+  /// used to call clerk/get twice — once in the probe
+  /// ([_confirmClerkSeat]) and once in AppState's refresh — so the
+  /// probe result is reused instead of fetched again. Entries are
+  /// consumed (removed) by [takeCachedClerkRaw]; the map is cleared
+  /// at the start of every [sessionForAccount] so a stale probe
+  /// never survives into the next login.
+  final Map<Session, Map<String, dynamic>> _cachedClerkRaw = {};
+
+  /// Take (and remove) the probe's clerk/get response for [session],
+  /// or null when the probe did not fetch one for this session.
+  Map<String, dynamic>? takeCachedClerkRaw(Session session) =>
+      _cachedClerkRaw.remove(session);
+
   /// Full manual login: login -> list shops -> switch per shop ->
   /// balance check -> clerk-permission probe (§4.1, D-05).
   Future<Session> sessionForAccount(
@@ -282,6 +297,7 @@ class ApiClient {
     int preferredShopId = 0,
     void Function(String note)? onNote,
   }) async {
+    _cachedClerkRaw.clear();
     final base = await loginAccount(phone, password);
     final resp = await request(
       'GET',
@@ -405,6 +421,9 @@ class ApiClient {
     }
     final clerk = extractClerk(decoded);
     if (clerk == null) return ('denied', '无店员席位');
+    // Keep the fetched response for AppState's refresh, so the cold
+    // start does not call clerk/get a second time for this session.
+    _cachedClerkRaw[candidate] = decoded;
     return ('confirmed', '店员 ID ${clerk.id}');
   }
 

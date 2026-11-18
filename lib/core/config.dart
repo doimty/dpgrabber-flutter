@@ -102,6 +102,7 @@ Map<String, dynamic> defaultConfigJson() => {
       },
       'item_always_types': ['文字语音条', '文语体验单'],
       'clerk_name': '',
+      'clerk_id': 0,
       'updated_at': '',
       'busy_cooldown_sec': 60.0,
     };
@@ -140,6 +141,16 @@ String? confirmWaitError(Map<String, dynamic> cfg) {
     }
   }
   return null;
+}
+
+/// Tolerant clerk-id parse: our own files always store an int, but
+/// older files have no `clerk_id` key at all — never fail the whole
+/// config over a display-only cache value.
+int _asClerkId(dynamic v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v.trim()) ?? 0;
+  return 0;
 }
 
 /// True when saving [newList] would remove/change entries of a non-empty
@@ -269,6 +280,11 @@ class AppConfig {
   final Map<String, List<String>> itemNameMap;
   final List<String> itemAlwaysTypes;
   final String clerkName;
+  /// Cached clerk id from the last successful clerk/get (0 = unknown).
+  /// Persisted next to [clerkName] so the account card and the listen
+  /// hero can show `店铺 sid · ID n` from cache while the live session
+  /// is still being rebuilt — never used for auth decisions.
+  final int clerkId;
   final String updatedAt;
   final double busyCooldownSec;
 
@@ -326,6 +342,7 @@ class AppConfig {
     required this.itemNameMap,
     required this.itemAlwaysTypes,
     required this.clerkName,
+    required this.clerkId,
     required this.updatedAt,
     required this.busyCooldownSec,
     this.extra = const {},
@@ -601,6 +618,7 @@ class AppConfig {
       itemNameMap: nameMap,
       itemAlwaysTypes: always,
       clerkName: (merged['clerk_name'] ?? '').toString(),
+      clerkId: _asClerkId(merged['clerk_id']),
       updatedAt: (merged['updated_at'] ?? '').toString(),
       busyCooldownSec: _asDouble(merged['busy_cooldown_sec'] ?? 60.0),
       extra: extra,
@@ -661,6 +679,7 @@ class AppConfig {
       'item_name_map': itemNameMap,
       'item_always_types': itemAlwaysTypes,
       'clerk_name': clerkName,
+      'clerk_id': clerkId,
       'updated_at': updatedAt,
       'busy_cooldown_sec': busyCooldownSec,
     };
@@ -718,6 +737,7 @@ class AppConfig {
     Map<String, List<String>>? itemNameMap,
     List<String>? itemAlwaysTypes,
     String? clerkName,
+    int? clerkId,
     String? updatedAt,
     double? busyCooldownSec,
     Map<String, dynamic>? extra,
@@ -774,6 +794,7 @@ class AppConfig {
       itemNameMap: itemNameMap ?? this.itemNameMap,
       itemAlwaysTypes: itemAlwaysTypes ?? this.itemAlwaysTypes,
       clerkName: clerkName ?? this.clerkName,
+      clerkId: clerkId ?? this.clerkId,
       updatedAt: updatedAt ?? this.updatedAt,
       busyCooldownSec: busyCooldownSec ?? this.busyCooldownSec,
       extra: extra ?? this.extra,
