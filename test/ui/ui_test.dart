@@ -267,7 +267,16 @@ void main() {
       return state;
     }
 
+    /// Opens the account sheet from the card header.
+    Future<void> openSheet(WidgetTester tester) async {
+      await tester.tap(find.text('加冰'));
+      await tester.pumpAndSettle();
+      expect(find.text('切换账号'), findsOneWidget);
+    }
+
+    /// Opens the sheet, then the add form inside it.
     Future<void> openAddForm(WidgetTester tester) async {
+      await openSheet(tester);
       await tester.tap(find.text('添加账号'));
       await tester.pumpAndSettle();
       expect(
@@ -280,60 +289,54 @@ void main() {
       );
     }
 
-    testWidgets('add row exists when logged in, form hidden until tapped',
+    testWidgets('card opens the sheet; single account is one checked row',
         (tester) async {
       final state = await loggedInFakeState(tester);
       tallViewport(tester);
       await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
       await tester.pumpAndSettle();
-      expect(find.text('添加账号'), findsOneWidget);
-      expect(find.byIcon(Icons.add), findsOneWidget);
-      // No add form yet — and no logged-out login form either.
-      expect(
-        find.widgetWithText(TextField, '11 位手机号'),
-        findsNothing,
-      );
-      expect(find.text('登录验证'), findsNothing);
-      // Same ListTile as the saved rows: zero contentPadding, same
-      // title style, same chevron.
-      final addTile = tester.widget<ListTile>(
-        find.ancestor(
-          of: find.text('添加账号'),
-          matching: find.byType(ListTile),
-        ),
-      );
-      expect(addTile.contentPadding, EdgeInsets.zero);
-      expect(
-        tester.widget<Text>(find.text('添加账号')).style,
-        tester
-            .widget<Text>(
-              find.text('加冰 · 138****0000 · 店 92'),
-            )
-            .style,
-      );
+      // Card shows only the current identity — no saved row, no
+      // add row, no clear action on the page itself.
+      expect(find.text('加冰 · 138****0000 · 店 92'), findsNothing);
+      expect(find.text('添加账号'), findsNothing);
+      expect(find.text('清除已保存账号'), findsNothing);
+      // The card is the sheet entry: a chevron on the header row.
       expect(
         find.descendant(
           of: find.ancestor(
-            of: find.text('添加账号'),
-            matching: find.byType(ListTile),
+            of: find.text('加冰'),
+            matching: find.byType(InkWell),
           ),
           matching: find.byIcon(Icons.chevron_right),
         ),
         findsOneWidget,
       );
-      // Expand, then collapse again.
-      await openAddForm(tester);
-      expect(find.text('登录验证'), findsOneWidget);
-      await tester.tap(find.text('添加账号'));
+      // Open the sheet: one checked row, add row, clear action.
+      await tester.tap(find.text('加冰'));
       await tester.pumpAndSettle();
+      expect(find.text('切换账号'), findsOneWidget);
+      expect(find.text('加冰 · 138****0000 · 店 92'), findsOneWidget);
+      expect(find.byIcon(Icons.check), findsOneWidget);
+      expect(find.text('添加账号'), findsOneWidget);
+      expect(find.text('清除已保存账号'), findsOneWidget);
+      // No chevron on the saved row (selection, not navigation).
       expect(
-        find.widgetWithText(TextField, '11 位手机号'),
+        find.descendant(
+          of: find.ancestor(
+            of: find.text('加冰 · 138****0000 · 店 92'),
+            matching: find.byType(ListTile),
+          ),
+          matching: find.byIcon(Icons.chevron_right),
+        ),
         findsNothing,
       );
-      expect(find.text('登录验证'), findsNothing);
+      // Close the sheet again via the X.
+      await tester.tap(find.byIcon(Icons.close));
+      await tester.pumpAndSettle();
+      expect(find.text('切换账号'), findsNothing);
     });
 
-    testWidgets('no add row when logged out', (tester) async {
+    testWidgets('no sheet entry when logged out', (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
       state.savedAccounts = [
@@ -343,7 +346,20 @@ void main() {
       await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
       await tester.pumpAndSettle();
       expect(find.text('添加账号'), findsNothing);
+      expect(find.text('切换账号'), findsNothing);
       expect(find.text('登录验证'), findsOneWidget);
+      // The logged-out card is the login form, not a sheet entry:
+      // no chevron on it.
+      expect(
+        find.descendant(
+          of: find.ancestor(
+            of: find.text('登录验证'),
+            matching: find.byType(AppCard),
+          ),
+          matching: find.byIcon(Icons.chevron_right),
+        ),
+        findsNothing,
+      );
     });
 
     testWidgets('invalid add input shows inline error, changes nothing',
@@ -410,13 +426,116 @@ void main() {
             .toSet(),
         containsAll(['13800000000', '13900000001']),
       );
-      // Form collapsed; card shows the new account; add row stays.
+      // Sheet dismissed; card header shows the new account.
+      expect(find.text('切换账号'), findsNothing);
+      expect(find.text('添加账号'), findsNothing);
       expect(
         find.widgetWithText(TextField, '11 位手机号'),
         findsNothing,
       );
       expect(find.text('139****0001'), findsOneWidget);
-      expect(find.text('添加账号'), findsOneWidget);
+    });
+
+    testWidgets('two saved accounts: sheet list has a checkmark; '
+        'tapping the other switches and dismisses', (tester) async {
+      final state = await loggedInStubbedState(tester);
+      addTearDown(state.dispose);
+      expect(state.session?.sid, '92');
+      // A second saved account (credentials + per-account config
+      // with its own clerk name), so the sheet lists two rows.
+      await tester.runAsync(() async {
+        await (state.store as FileCredentialStore).saveAccount(
+          phone: '13900000001',
+          password: 'new-pw',
+        );
+        state.accounts.saveAccount(
+          state.config.copyWith(
+            phone: '13900000001',
+            clerkName: '小红',
+            clerkId: 230314,
+            shopId: 92,
+          ),
+          phone: '13900000001',
+        );
+        // The stubbed login never persists the shop id (the real
+        // API does — on Yahel's device the row reads 店 92):
+        // stamp it on the 138 file so the labels match production.
+        state.accounts.saveAccount(
+          state.config.copyWith(shopId: 92),
+          phone: '13800000000',
+        );
+      });
+      state.savedAccounts = state.accounts.listAccounts();
+      expect(state.savedAccounts.length, 2);
+      tallViewport(tester);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      await openSheet(tester);
+      // Both rows render; current (138) carries the checkmark,
+      // the other row has none; no row has a chevron.
+      expect(find.text('加冰 · 138****0000 · 店 92'), findsOneWidget);
+      expect(find.text('小红 · 139****0001 · 店 92'), findsOneWidget);
+      expect(find.byIcon(Icons.check), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.ancestor(
+            of: find.text('加冰 · 138****0000 · 店 92'),
+            matching: find.byType(ListTile),
+          ),
+          matching: find.byIcon(Icons.check),
+        ),
+        findsOneWidget,
+      );
+      for (final label in [
+        '加冰 · 138****0000 · 店 92',
+        '小红 · 139****0001 · 店 92',
+      ]) {
+        expect(
+          find.descendant(
+            of: find.ancestor(
+              of: find.text(label),
+              matching: find.byType(ListTile),
+            ),
+            matching: find.byIcon(Icons.chevron_right),
+          ),
+          findsNothing,
+        );
+      }
+      // Tap the other row: switches to it, sheet dismisses.
+      await tester.tap(find.text('小红 · 139****0001 · 店 92'));
+      await tester.pumpAndSettle();
+      expect(state.loginPhone, '13900000001');
+      expect(state.session?.sid, '92');
+      expect(find.text('切换账号'), findsNothing);
+      expect(find.text('139****0001'), findsOneWidget);
+    });
+
+    testWidgets('clear saved accounts lives at the sheet bottom',
+        (tester) async {
+      final state = await loggedInFakeState(tester);
+      tallViewport(tester);
+      await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
+      await tester.pumpAndSettle();
+      // Not on the page: only in the sheet.
+      expect(find.text('清除已保存账号'), findsNothing);
+      await openSheet(tester);
+      expect(find.text('清除已保存账号'), findsOneWidget);
+      // Cancel keeps the sheet open.
+      await tester.tap(find.text('清除已保存账号'));
+      await tester.pumpAndSettle();
+      expect(find.text('将删除已保存的手机号和密码。'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(find.text('切换账号'), findsOneWidget);
+      expect(state.loggedIn, isTrue);
+      // Confirm: sheet dismisses, back to the login form.
+      await tester.tap(find.text('清除已保存账号'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('清除'));
+      await tester.pumpAndSettle();
+      expect(find.text('切换账号'), findsNothing);
+      expect(state.loggedIn, isFalse);
+      expect(find.text('登录验证'), findsOneWidget);
     });
 
     testWidgets('failed add leaves the current session untouched',
@@ -962,7 +1081,8 @@ void main() {
     });
 
     testWidgets(
-        'logged-in account card shows merged shop line, saved accounts folded in',
+        'logged-in account card shows only the current identity; '
+        'accounts live in the sheet',
         (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
@@ -983,9 +1103,15 @@ void main() {
       expect(tester.widget<Text>(find.text('加冰')).style?.fontSize, 17);
       expect(find.text('店铺 92 · ID 230313'), findsOneWidget);
       expect(find.text('138****0000'), findsOneWidget);
-      // Saved accounts live inside the account card now — no
-      // separate section title.
+      // Nothing else in the card: no duplicate saved row, no
+      // clear action on the page — they live in the sheet.
       expect(find.text('已保存账号'), findsNothing);
+      expect(find.text('加冰 · 138****0000 · 店 92'), findsNothing);
+      expect(find.text('清除已保存账号'), findsNothing);
+      // Tapping the card opens the sheet with the list.
+      await tester.tap(find.text('加冰'));
+      await tester.pumpAndSettle();
+      expect(find.text('切换账号'), findsOneWidget);
       expect(find.text('加冰 · 138****0000 · 店 92'), findsOneWidget);
       expect(find.text('清除已保存账号'), findsOneWidget);
     });

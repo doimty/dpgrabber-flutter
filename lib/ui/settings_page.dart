@@ -7,12 +7,14 @@
 /// confirmation). There is no sign-out button: a saved account stays
 /// signed in across restarts (the app rebuilds the live session
 /// itself on cold start), and removing the account entirely is
-/// "清除已保存账号". Saved accounts live inside the same account card
-/// (divider + tappable rows), not as a separate section. While logged
-/// in, a "+ 添加账号" row (same ListTile style as the saved rows)
-/// expands the same login form inline to add another account: a
-/// successful add saves the new credentials and switches the session
-/// to it; a failed add leaves the current session untouched.
+/// "清除已保存账号". The logged-in card shows the current identity
+/// ONLY (avatar, name, shop line, masked phone) and is the entry to
+/// the account sheet: tapping it opens a modal bottom sheet with
+/// every saved account (checkmark on the current one, tap switches
+/// and dismisses), the "+ 添加账号" row (same login form inline in
+/// the sheet), and the clear action separated at the sheet bottom.
+/// A failed add leaves the current session untouched and the sheet
+/// stays open with the error shown inside it.
 ///
 /// Saving is automatic (§10.4): every text field commits on submit /
 /// blur through [SettingsFieldCommitter] — full [AppConfig.fromJson]
@@ -40,6 +42,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core.dart';
+import '../theme/glass.dart';
 import '../wenxi_ui/liquid_bottom_navigation.dart';
 import '../wenxi_ui/liquid_glass.dart';
 import 'advanced_settings_page.dart';
@@ -89,16 +92,37 @@ class _SettingsPageState extends State<SettingsPage>
     with SettingsFieldPageState<SettingsPage> {
   late final TextEditingController _phoneController;
   late final TextEditingController _passwordController;
-  // The inline add-account form (logged-in card) has its own
+  // The inline add-account form (logged-in sheet) has its own
   // controllers: it must start empty, never prefilled with the
   // current account's phone. The form UI itself is shared with the
   // logged-out login form via [_loginForm].
   late final TextEditingController _addPhoneController;
   late final TextEditingController _addPasswordController;
-  bool _showAddAccount = false;
   bool _showPassword = false;
   bool _loggingIn = false;
   String? _loginError;
+
+  // Account sheet (§10.2): the sheet lives in its own overlay, so
+  // the page's setState cannot reach it. [_sheetVersion] is bumped
+  // by [_setStateWithSheet] to rebuild the sheet content;
+  // [_sheetShowAdd] selects the sheet's add-form state; [_sheetOpen]
+  // tracks whether the sheet is currently up (so [_login] only pops
+  // a route when there is one to pop).
+  final ValueNotifier<int> _sheetVersion = ValueNotifier<int>(0);
+  bool _sheetShowAdd = false;
+  bool _sheetOpen = false;
+
+  /// setState that also refreshes the account sheet when it is open
+  /// (the sheet lives in its own overlay). Call sites that drive
+  /// sheet UI — [_login], [_switchTo], the password-visibility
+  /// toggle, the sheet's list/form switch — must go through here,
+  /// never plain setState. Bumping the notifier with no listener
+  /// (sheet closed) is a harmless no-op.
+  void _setStateWithSheet(void Function() fn) {
+    if (!mounted) return;
+    setState(fn);
+    _sheetVersion.value++;
+  }
 
   AppState get _state => widget.state;
   AppConfig get _cfg => _state.config;
@@ -146,6 +170,7 @@ class _SettingsPageState extends State<SettingsPage>
     _passwordController.dispose();
     _addPhoneController.dispose();
     _addPasswordController.dispose();
+    _sheetVersion.dispose();
     super.dispose();
   }
 
@@ -193,14 +218,15 @@ class _SettingsPageState extends State<SettingsPage>
     return null;
   }
 
-  /// Log in with the typed credentials. [isAdd] selects the inline
-  /// add-account form (logged-in card) instead of the logged-out
-  /// form; both share validation, the inline error and this flow.
-  /// A failed login throws inside [AppState.login] before any
-  /// session/credential mutation, so the current session and the
-  /// saved accounts survive a failed add untouched. On success the
-  /// new account is saved and becomes the live session; the add
-  /// form collapses. Listening is stopped first when adding (the
+  /// Log in with the typed credentials. [isAdd] selects the
+  /// add-account form in the account sheet instead of the
+  /// logged-out form; both share validation, the inline error and
+  /// this flow. A failed login throws inside [AppState.login]
+  /// before any session/credential mutation, so the current session
+  /// and the saved accounts survive a failed add untouched, and the
+  /// sheet stays open with the error shown inside it. On success
+  /// the new account is saved and becomes the live session; the
+  /// sheet dismisses. Listening is stopped first when adding (the
   /// engine must not keep polling on the old session); the
   /// logged-out path can never be listening, so this is a no-op
   /// there.
@@ -211,10 +237,10 @@ class _SettingsPageState extends State<SettingsPage>
         isAdd ? _addPasswordController : _passwordController;
     final problem = _validateLogin(phoneController, passwordController);
     if (problem != null) {
-      setState(() => _loginError = problem);
+      _setStateWithSheet(() => _loginError = problem);
       return;
     }
-    setState(() {
+    _setStateWithSheet(() {
       _loggingIn = true;
       _loginError = null;
     });
@@ -227,33 +253,33 @@ class _SettingsPageState extends State<SettingsPage>
       passwordController.clear();
       if (isAdd) {
         phoneController.clear();
-        if (mounted) setState(() => _showAddAccount = false);
+        // Success: the new account is saved and live — dismiss the
+        // sheet (the card header already shows it). Only pop when
+        // the sheet is actually open: without the guard a late
+        // success would pop the Settings page itself.
+        if (mounted && _sheetOpen) {
+          _sheetOpen = false;
+          _sheetShowAdd = false;
+          Navigator.of(context).pop();
+        }
       }
     } on ApiError catch (e) {
-      setState(() => _loginError = '登录失败：${e.message}');
+      _setStateWithSheet(() => _loginError = '登录失败：${e.message}');
     } catch (e) {
-      setState(() => _loginError = '登录失败：$e');
+      _setStateWithSheet(() => _loginError = '登录失败：$e');
     } finally {
-      if (mounted) setState(() => _loggingIn = false);
+      _setStateWithSheet(() => _loggingIn = false);
     }
   }
 
-  void _toggleAddAccount() {
-    setState(() {
-      _showAddAccount = !_showAddAccount;
-      if (_showAddAccount) {
-        _loginError = null;
-        _addPhoneController.clear();
-        _addPasswordController.clear();
-      }
-    });
-  }
-
-  /// The login form, shared by the logged-out state and the inline
-  /// add-account form: same fields, same button, same spacing
-  /// (8/12/16 rhythm). Only the controllers, the header/hint copy
-  /// and the submit path differ. The error itself is shown once,
-  /// above the card ([ErrorBanner] on [_loginError]).
+  /// The login form, shared by the logged-out state and the
+  /// add-account form in the sheet: same fields, same button, same
+  /// spacing (8/12/16 rhythm). Only the controllers, the
+  /// header/hint copy and the submit path differ. The error itself
+  /// is shown once, above the form — [ErrorBanner] on [_loginError]
+  /// in the sheet when it is open, above the card otherwise
+  /// ([_sheetOpen] suppresses the page-level banner so the same
+  /// error never renders twice).
   Widget _loginForm({
     required TextEditingController phoneController,
     required TextEditingController passwordController,
@@ -289,7 +315,7 @@ class _SettingsPageState extends State<SettingsPage>
           obscureText: !_showPassword,
           suffixIcon: IconButton(
             tooltip: _showPassword ? '隐藏密码' : '显示密码',
-            onPressed: () => setState(
+            onPressed: () => _setStateWithSheet(
               () => _showPassword = !_showPassword,
             ),
             icon: Icon(
@@ -336,17 +362,15 @@ class _SettingsPageState extends State<SettingsPage>
   }
 
   Future<void> _switchTo(String phone) async {
-    setState(() {
+    _setStateWithSheet(() {
       _loggingIn = true;
       _loginError = null;
     });
     final ok = await _state.switchAccount(phone);
-    if (mounted) {
-      setState(() {
-        _loggingIn = false;
-        if (!ok) _loginError = _state.lastError ?? '切换账号失败';
-      });
-    }
+    _setStateWithSheet(() {
+      _loggingIn = false;
+      if (!ok) _loginError = _state.lastError ?? '切换账号失败';
+    });
   }
 
   Future<void> _clearSaved() async {
@@ -380,6 +404,294 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
+  /// Logged-in account card content: the current identity only —
+  /// avatar, 17/w600 name, merged shop line, masked phone — plus a
+  /// chevron: the whole card is the entry to the account sheet
+  /// (§10.2). No saved-account rows, no add row, no clear button
+  /// live here any more.
+  Widget _accountHeaderRow() {
+    final palette = _state.theme.palette;
+    return Row(
+      children: [
+        CircleAvatar(
+          backgroundColor: palette.accent,
+          foregroundColor: Colors.white,
+          backgroundImage: _state.avatarPath.isNotEmpty
+              ? FileImage(File(_state.avatarPath))
+              : null,
+          child: _state.avatarPath.isEmpty
+              ? Text(
+                  _accountTitle.characters.first.toUpperCase(),
+                )
+              : null,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _accountTitle,
+                style: TextStyle(
+                  color: palette.textDark,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (_accountShopLine != null)
+                Text(
+                  _accountShopLine!,
+                  style: TextStyle(
+                    color: palette.hint,
+                    fontSize: 13,
+                  ),
+                ),
+              Text(
+                _state.currentPhone.isEmpty
+                    ? '未登录'
+                    : maskPhone(_state.currentPhone),
+                style: TextStyle(
+                  color: palette.hint,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Icon(Icons.chevron_right, color: palette.hint),
+      ],
+    );
+  }
+
+  /// Account sheet (§10.2): the modal bottom sheet behind the
+  /// account card — same sheet styling as the history entry menu
+  /// (card background, dialog radius on the top corners, drag
+  /// handle), `isScrollControlled` so the keyboard fits the add
+  /// form. Content is rebuilt through [_sheetVersion] (see
+  /// [_setStateWithSheet]): list state or add-form state, selected
+  /// by [_sheetShowAdd]. Always opens on the list.
+  Future<void> _openAccountSheet() async {
+    if (!_state.loggedIn) return;
+    // Fresh sheet state, applied with a page rebuild so a stale
+    // login-error banner hides at once (it is suppressed while
+    // the sheet is open — the error, if any, shows inside it).
+    setState(() {
+      _sheetShowAdd = false;
+      _loginError = null;
+      _sheetOpen = true;
+    });
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: _state.theme.palette.cardBg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(kDialogRadius),
+        ),
+      ),
+      // The sheet is a new route above the page, so the page's
+      // AppStateScope is NOT an ancestor of its content: re-provide
+      // it here, or LabeledField/ErrorBanner (which read the
+      // palette through the scope) throw on build.
+      builder: (sheetContext) => AppStateScope(
+        state: _state,
+        child: ValueListenableBuilder<int>(
+          valueListenable: _sheetVersion,
+          builder: (context, _, _) => SafeArea(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: _sheetShowAdd
+                  ? _accountSheetAddForm(sheetContext)
+                  : _accountSheetList(sheetContext),
+            ),
+          ),
+        ),
+      ),
+    );
+    _sheetOpen = false;
+    _sheetShowAdd = false;
+  }
+
+  /// Sheet header: centred 17/w600 title, close on the right,
+  /// back chevron on the left in the add-form state (returns to
+  /// the list). The empty 48-wide box in the list state keeps the
+  /// title centred.
+  Widget _sheetHeader({
+    required String title,
+    required BuildContext sheetContext,
+    VoidCallback? onBack,
+  }) {
+    final palette = _state.theme.palette;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      child: Row(
+        children: [
+          if (onBack != null)
+            IconButton(
+              tooltip: '返回',
+              onPressed: onBack,
+              icon: Icon(Icons.chevron_left, color: palette.textDark),
+            )
+          else
+            const SizedBox(width: 48),
+          Expanded(
+            child: Text(
+              title,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: palette.textDark,
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: '关闭',
+            onPressed: () => Navigator.of(sheetContext).pop(),
+            icon: Icon(Icons.close, color: palette.hint),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One saved-account row in the sheet: a selection, not a
+  /// navigation push — checkmark (accent) on the current account,
+  /// no chevron anywhere. Tapping another account switches to it
+  /// and dismisses the sheet; the current row is not tappable
+  /// (re-switching would just re-login). Row content stays
+  /// `名 · 脱敏电话 · 店 N`.
+  Widget _sheetAccountRow(
+    Map<String, dynamic> account,
+    BuildContext sheetContext,
+  ) {
+    final palette = _state.theme.palette;
+    final phone = (account['phone'] ?? '').toString();
+    final isCurrent = FileCredentialStore.digitsOf(phone) ==
+        FileCredentialStore.digitsOf(_state.currentPhone);
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      title: Text(
+        AccountStore.labelFor(account),
+        style: TextStyle(color: palette.textDark),
+      ),
+      trailing:
+          isCurrent ? Icon(Icons.check, color: palette.accent) : null,
+      onTap: _loggingIn || isCurrent
+          ? null
+          : () {
+              unawaited(_switchTo(phone));
+              Navigator.of(sheetContext).pop();
+            },
+    );
+  }
+
+  /// Sheet list state: every saved account (one account still
+  /// gets its checked row — the card no longer repeats it), the
+  /// "+ 添加账号" row, and the destructive clear action in its
+  /// own block at the bottom, iOS action-sheet style.
+  Widget _accountSheetList(BuildContext sheetContext) {
+    final palette = _state.theme.palette;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sheetHeader(title: '切换账号', sheetContext: sheetContext),
+        for (final account in _state.savedAccounts)
+          _sheetAccountRow(account, sheetContext),
+        const Divider(height: 24),
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          leading: Icon(
+            Icons.add_circle_outline,
+            color: palette.textDark,
+          ),
+          title: Text(
+            '添加账号',
+            style: TextStyle(color: palette.textDark),
+          ),
+          onTap: _loggingIn
+              ? null
+              : () {
+                  _addPhoneController.clear();
+                  _addPasswordController.clear();
+                  _setStateWithSheet(() {
+                    _loginError = null;
+                    _sheetShowAdd = true;
+                  });
+                },
+        ),
+        const Divider(height: 24),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+          child: TextButton(
+            onPressed: () => _clearSavedFromSheet(sheetContext),
+            child: Text(
+              '清除已保存账号',
+              style: TextStyle(
+                color: palette.logError,
+                fontSize: 15,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Sheet add-form state: the same shared login form, with the
+  /// error shown inside the sheet (the page-level banner is
+  /// suppressed while the sheet is open). Back returns to the
+  /// list; success dismisses the sheet ([_login]); failure keeps
+  /// the form open.
+  Widget _accountSheetAddForm(BuildContext sheetContext) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sheetHeader(
+          title: '添加账号',
+          sheetContext: sheetContext,
+          onBack: () =>
+              _setStateWithSheet(() => _sheetShowAdd = false),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_loginError != null) ErrorBanner(_loginError!),
+              _loginForm(
+                phoneController: _addPhoneController,
+                passwordController: _addPasswordController,
+                onSubmit: () => _login(isAdd: true),
+                header: '添加一个新账号，登录成功后会保存并切换过去',
+                submitHint: '请输入新账号的手机号和密码',
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Clear from the sheet: [_clearSaved] only clears on
+  /// confirmation — a cleared account is logged out, so the sheet
+  /// (whose list is now stale) goes away with it. Cancel leaves
+  /// the sheet open.
+  Future<void> _clearSavedFromSheet(BuildContext sheetContext) async {
+    await _clearSaved();
+    if (sheetContext.mounted && mounted && !_state.loggedIn) {
+      _sheetOpen = false;
+      _sheetShowAdd = false;
+      Navigator.of(sheetContext).pop();
+    }
+  }
+
   Future<void> _setMemoMode(int mode) async {
     await _state.updateConfig(_state.config.copyWith(memoMode: mode));
     setState(() {});
@@ -409,140 +721,32 @@ class _SettingsPageState extends State<SettingsPage>
             ),
             children: [
               // Account (§10.2): login lives here — the app never
-              // blocks on a standalone login page. One card holds the
-              // login form (or the logged-in identity) plus, below a
-              // divider, the saved accounts and the clear button.
+              // blocks on a standalone login page. The card holds
+              // the login form (logged out) or the current identity
+              // only (logged in); everything else — saved accounts,
+              // add, clear — lives in the account sheet behind the
+              // card.
               const SectionTitle('账号'),
-              if (_loginError != null) ErrorBanner(_loginError!),
-              AppCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (_state.loggedIn)
-                      Row(
-                        children: [
-                          CircleAvatar(
-                            backgroundColor: palette.accent,
-                            foregroundColor: Colors.white,
-                            backgroundImage: _state.avatarPath.isNotEmpty
-                                ? FileImage(File(_state.avatarPath))
-                                : null,
-                            child: _state.avatarPath.isEmpty
-                                ? Text(
-                                    _accountTitle.characters.first
-                                        .toUpperCase(),
-                                  )
-                                : null,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _accountTitle,
-                                  style: TextStyle(
-                                    color: palette.textDark,
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                if (_accountShopLine != null)
-                                  Text(
-                                    _accountShopLine!,
-                                    style: TextStyle(
-                                      color: palette.hint,
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                Text(
-                                  _state.currentPhone.isEmpty
-                                      ? '未登录'
-                                      : maskPhone(_state.currentPhone),
-                                  style: TextStyle(
-                                    color: palette.hint,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      )
-                    else
-                      _loginForm(
-                        phoneController: _phoneController,
-                        passwordController: _passwordController,
-                        onSubmit: () => _login(),
-                        header: _state.config.phone.isEmpty
-                            ? '还没有账号配置，登录后会自动建档'
-                            : '将登录 ${maskPhone(_state.config.phone)}',
-                        submitHint: '请输入手机号和密码后登录',
-                      ),
-                    if (_state.savedAccounts.isNotEmpty ||
-                        _state.loggedIn) ...[
-                      const Divider(height: 24),
-                      for (final account in _state.savedAccounts)
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            AccountStore.labelFor(account),
-                            style: TextStyle(color: palette.textDark),
-                          ),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: _loggingIn
-                              ? null
-                              : () => _switchTo(
-                                    (account['phone'] ?? '').toString(),
-                                  ),
-                        ),
-                      // Add-account entry (logged in only): the same
-                      // ListTile as the saved rows — zero
-                      // contentPadding, same title style, same
-                      // chevron — with a plain system plus icon as
-                      // the only difference, in the title colour
-                      // (no accent/fancy colour). Tapping expands
-                      // the shared login form inline below.
-                      if (_state.loggedIn)
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(
-                            Icons.add,
-                            color: palette.textDark,
-                          ),
-                          title: Text(
-                            '添加账号',
-                            style: TextStyle(color: palette.textDark),
-                          ),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap:
-                              _loggingIn ? null : _toggleAddAccount,
-                        ),
-                      if (_showAddAccount) ...[
-                        const Divider(height: 24),
-                        _loginForm(
-                          phoneController: _addPhoneController,
-                          passwordController: _addPasswordController,
-                          onSubmit: () => _login(isAdd: true),
-                          header: '添加一个新账号，登录成功后会保存并切换过去',
-                          submitHint: '请输入新账号的手机号和密码',
-                        ),
-                      ],
-                      if (_state.savedAccounts.isNotEmpty)
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: TextButton(
-                            onPressed: _clearSaved,
-                            child: Text(
-                              '清除已保存账号',
-                              style: TextStyle(color: palette.logError),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ],
+              if (_loginError != null && !_sheetOpen)
+                ErrorBanner(_loginError!),
+              if (_state.loggedIn)
+                InkWell(
+                  onTap: _loggingIn ? null : _openAccountSheet,
+                  borderRadius: BorderRadius.circular(16),
+                  child: AppCard(child: _accountHeaderRow()),
+                )
+              else
+                AppCard(
+                  child: _loginForm(
+                    phoneController: _phoneController,
+                    passwordController: _passwordController,
+                    onSubmit: () => _login(),
+                    header: _state.config.phone.isEmpty
+                        ? '还没有账号配置，登录后会自动建档'
+                        : '将登录 ${maskPhone(_state.config.phone)}',
+                    submitHint: '请输入手机号和密码后登录',
+                  ),
                 ),
-              ),
               // Order conditions (§10.4).
               const SectionTitle('接单条件'),
               AppCard(
