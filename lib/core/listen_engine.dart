@@ -22,6 +22,13 @@ enum LogLevel { debug, info, warning, error, success }
 
 typedef LogCallback = void Function(LogLevel level, String message);
 typedef SpeakCallback = void Function(String text);
+typedef PollStartedCallback = void Function(DateTime startedAt);
+typedef PollCallback = void Function(
+  DateTime startedAt,
+  DateTime completedAt,
+  Duration duration,
+  bool succeeded,
+);
 
 /// Outcome of one poll round's confirm handling, for the loop.
 typedef ConfirmTaskResult = ({ConfirmTaskOutcome outcome, String reason});
@@ -31,17 +38,28 @@ class ListenEngine {
   AppConfig config;
   final LogCallback log;
   final SpeakCallback? speak;
-  final void Function(Map<String, dynamic> order, String orderId,
-      int confirmCalls)? onGrab;
-  final void Function(Map<String, dynamic> order, HistoryOutcome outcome,
-      String reason)? onOutcome;
+  final void Function(
+    Map<String, dynamic> order,
+    String orderId,
+    int confirmCalls,
+  )?
+  onGrab;
+  final void Function(
+    Map<String, dynamic> order,
+    HistoryOutcome outcome,
+    String reason,
+  )?
+  onOutcome;
   final void Function(Session session)? onSession;
+  final PollStartedCallback? onPollStarted;
+  final PollCallback? onPoll;
   final DateTime Function()? now;
   final Duration Function()? monotonic;
   final Random _rng;
 
   bool _running = false;
   bool _stopped = false;
+  int _runGeneration = 0;
   Clerk? _clerk;
 
   /// The engine's working session, established by [_run] /
@@ -66,6 +84,8 @@ class ListenEngine {
     this.onGrab,
     this.onOutcome,
     this.onSession,
+    this.onPollStarted,
+    this.onPoll,
     this.now,
     this.monotonic,
     Random? rng,
@@ -94,12 +114,36 @@ class ListenEngine {
     }
   }
 
+  void _reportPollStarted(DateTime startedAt) {
+    try {
+      onPollStarted?.call(startedAt);
+    } catch (_) {
+      // Diagnostics must not interrupt the polling loop.
+    }
+  }
+
+  void _reportPoll(
+    DateTime startedAt,
+    DateTime completedAt,
+    Duration duration,
+    bool succeeded,
+  ) {
+    try {
+      onPoll?.call(startedAt, completedAt, duration, succeeded);
+    } catch (_) {
+      // Diagnostics must not interrupt the polling loop.
+    }
+  }
+
   /// Start listening. Returns false when already running or when the
   /// confirm-wait config is invalid (the error is logged). The loop
   /// runs asynchronously; this future completes as soon as the loop
   /// has been kicked off.
-  Future<bool> start(String phone, String password,
-      {Session? initialSession}) async {
+  Future<bool> start(
+    String phone,
+    String password, {
+    Session? initialSession,
+  }) async {
     if (_running) return false;
     final waitError = confirmWaitError(config.toJson());
     if (waitError != null) {
@@ -108,7 +152,8 @@ class ListenEngine {
     }
     _stopped = false;
     _running = true;
-    unawaited(_run(phone, password, initialSession));
+    final generation = ++_runGeneration;
+    unawaited(_run(phone, password, initialSession, generation));
     return true;
   }
 
@@ -117,17 +162,21 @@ class ListenEngine {
   void stop() {
     _stopped = true;
     _running = false;
+    _runGeneration++;
   }
+
+  bool _isRunActive(int? generation) =>
+      !_stopped && (generation == null || generation == _runGeneration);
 
   // -- sleep / seen ---------------------------------------------------
 
   /// Interruptible sleep; false when asked to stop.
-  Future<bool> sleep(double seconds) async {
-    if (seconds <= 0) return !_stopped;
-    final deadline = _monotonic() +
-        Duration(milliseconds: (seconds * 1000).round());
-    while (!_stopped) {
-      if (_monotonic() >= deadline) return true;
+  Future<bool> sleep(double seconds, {int? runGeneration}) async {
+    if (seconds <= 0) return _isRunActive(runGeneration);
+    final deadline =
+        _monotonic() + Duration(milliseconds: (seconds * 1000).round());
+    while (_isRunActive(runGeneration)) {
+      if (_monotonic() >= deadline) return _isRunActive(runGeneration);
       final remaining = deadline - _monotonic();
       final step = remaining < const Duration(milliseconds: 50)
           ? remaining
@@ -140,8 +189,7 @@ class ListenEngine {
   @visibleForTesting
   void markSeen(String orderId) {
     final nowDt = _now();
-    final ttl = Duration(
-        milliseconds: (config.seenTtlSec * 1000).round());
+    final ttl = Duration(milliseconds: (config.seenTtlSec * 1000).round());
     _seen.removeWhere((_, seenAt) => nowDt.difference(seenAt) >= ttl);
     if (orderId.isNotEmpty) _seen[orderId] = nowDt;
   }
@@ -151,8 +199,7 @@ class ListenEngine {
     if (orderId.isEmpty) return false;
     final seenAt = _seen[orderId];
     if (seenAt == null) return false;
-    final ttl =
-        Duration(milliseconds: (config.seenTtlSec * 1000).round());
+    final ttl = Duration(milliseconds: (config.seenTtlSec * 1000).round());
     return _now().difference(seenAt) < ttl;
   }
 
@@ -216,8 +263,13 @@ class ListenEngine {
   // -- lifecycle ------------------------------------------------------
 
   Future<void> _run(
-      String phone, String password, Session? initialSession) async {
+    String phone,
+    String password,
+    Session? initialSession,
+    int generation,
+  ) async {
     try {
+      if (!_isRunActive(generation)) return;
       Session session;
       if (initialSession != null && initialSession.token.isNotEmpty) {
         session = initialSession;
@@ -230,40 +282,53 @@ class ListenEngine {
           password,
           preferredShopId: config.shopId,
         );
+        if (!_isRunActive(generation)) return;
         _session = session;
         log(LogLevel.success, '登录成功，店铺 sid=${session.sid}');
       }
+      if (!_isRunActive(generation)) return;
       try {
         onSession?.call(session);
       } catch (_) {}
       try {
         final decoded = await client.clerkGet(session: session);
+        if (!_isRunActive(generation)) return;
         final found = extractClerk(decoded);
         if (found != null) {
           _clerk = found;
-          log(LogLevel.info,
-              '当前账号：${found.name ?? ''}（ID：${found.id}）');
+          log(LogLevel.info, '当前账号：${found.name ?? ''}（ID：${found.id}）');
         }
       } on ApiError catch (e) {
+        if (!_isRunActive(generation)) return;
         log(LogLevel.warning, '店员信息读取失败，不影响监听：${e.message}');
       }
-      await _pollLoop(phone, password);
+      await _pollLoop(phone, password, generation);
     } on ApiError catch (e) {
+      if (!_isRunActive(generation)) return;
       log(LogLevel.error, '启动失败：${e.message}');
       _speak('启动失败');
     } finally {
-      _running = false;
-      log(LogLevel.info, '监听已停止');
+      if (generation == _runGeneration) {
+        _running = false;
+        log(LogLevel.info, '监听已停止');
+      } else if (!_running) {
+        log(LogLevel.info, '监听已停止');
+      }
     }
   }
 
-  Future<bool> refreshSession(String phone, String password) async {
+  Future<bool> refreshSession(
+    String phone,
+    String password, {
+    int? runGeneration,
+  }) async {
     try {
       final session = await client.sessionForAccount(
         phone,
         password,
         preferredShopId: config.shopId,
       );
+      if (!_isRunActive(runGeneration)) return false;
       _session = session;
       log(LogLevel.success, '会话已重新建立，店铺 sid=${session.sid}');
       try {
@@ -271,6 +336,7 @@ class ListenEngine {
       } catch (_) {}
       return true;
     } on ApiError catch (e) {
+      if (!_isRunActive(runGeneration)) return false;
       log(LogLevel.error, '重新登录失败：${e.message}');
       return false;
     }
@@ -278,43 +344,77 @@ class ListenEngine {
 
   // -- poll loop (§6.1) ------------------------------------------------
 
-  Future<void> _pollLoop(String phone, String password) async {
+  Future<void> _pollLoop(
+    String phone,
+    String password,
+    int runGeneration,
+  ) async {
     final pageSize = 20;
     final timeout = config.requestTimeoutSec;
     final runRestEnabled = config.runRestEnabled;
     Duration? runDeadline;
     if (runRestEnabled) {
-      runDeadline = _monotonic() +
+      runDeadline =
+          _monotonic() +
           Duration(milliseconds: (_nextRunSeconds() * 60 * 1000).round());
     }
     log(LogLevel.info, '开始监听新订单');
-    while (!_stopped) {
+    while (_isRunActive(runGeneration)) {
       if (runRestEnabled &&
           runDeadline != null &&
           _monotonic() >= runDeadline) {
         final rest = _nextRestSeconds();
         if (rest > 0) {
-          log(LogLevel.info,
-              '进入休息：暂停监听约 ${(rest / 60.0).toStringAsFixed(1)} 分钟');
-          if (!await sleep(rest * 60)) return;
+          log(
+            LogLevel.info,
+            '进入休息：暂停监听约 ${(rest / 60.0).toStringAsFixed(1)} 分钟',
+          );
+          if (!await sleep(rest * 60, runGeneration: runGeneration)) return;
           log(LogLevel.info, '休息结束，恢复监听');
         }
-        runDeadline = _monotonic() +
+        runDeadline =
+            _monotonic() +
             Duration(milliseconds: (_nextRunSeconds() * 60 * 1000).round());
       }
       List<Map<String, dynamic>> orders;
+      final pollStartedAt = _now().toUtc();
+      final pollStopwatch = Stopwatch()..start();
+      _reportPollStarted(pollStartedAt);
+      if (!_isRunActive(runGeneration)) return;
       try {
         orders = await client.randomList(
-            pageSize: pageSize, timeoutSec: timeout, session: _session);
+          pageSize: pageSize,
+          timeoutSec: timeout,
+          session: _session,
+        );
+        if (!_isRunActive(runGeneration)) return;
+        pollStopwatch.stop();
+        _reportPoll(pollStartedAt, _now().toUtc(), pollStopwatch.elapsed, true);
+        if (!_isRunActive(runGeneration)) return;
       } on ApiError catch (e) {
+        if (!_isRunActive(runGeneration)) return;
+        pollStopwatch.stop();
+        _reportPoll(
+          pollStartedAt,
+          _now().toUtc(),
+          pollStopwatch.elapsed,
+          false,
+        );
+        if (!_isRunActive(runGeneration)) return;
         if (e.kind == ApiErrorKind.auth) {
           log(LogLevel.warning, '登录态失效，尝试重新登录…');
-          if (!await refreshSession(phone, password)) return;
+          if (!await refreshSession(
+            phone,
+            password,
+            runGeneration: runGeneration,
+          )) {
+            return;
+          }
           continue;
         }
         if (e.kind == ApiErrorKind.ip) {
           log(LogLevel.warning, 'IP 风控，暂停 60 秒');
-          if (!await sleep(60)) return;
+          if (!await sleep(60, runGeneration: runGeneration)) return;
           continue;
         }
         _consecutiveFailures += 1;
@@ -322,12 +422,13 @@ class ListenEngine {
         if (fails == 1 || fails % 10 == 0) {
           log(LogLevel.warning, '监听请求失败（连续 $fails 次）：${e.message}');
         }
-        if (!await sleep(failureDelay(fails))) return;
+        if (!await sleep(failureDelay(fails), runGeneration: runGeneration)) {
+          return;
+        }
         continue;
       }
       if (_consecutiveFailures > 0) {
-        log(LogLevel.info,
-            '网络恢复，继续监听（此前连续失败 $_consecutiveFailures 次）');
+        log(LogLevel.info, '网络恢复，继续监听（此前连续失败 $_consecutiveFailures 次）');
       }
       _consecutiveFailures = 0;
       if (orders.isNotEmpty && !_shapeLogged) {
@@ -353,13 +454,13 @@ class ListenEngine {
         }
       }
       if (orders.isEmpty) {
-        if (!await sleep(pollDelay())) return;
+        if (!await sleep(pollDelay(), runGeneration: runGeneration)) return;
         continue;
       }
       final order = orders[0];
       final orderId = orderIdOf(order);
       if (isSeen(orderId)) {
-        if (!await sleep(pollDelay())) return;
+        if (!await sleep(pollDelay(), runGeneration: runGeneration)) return;
         continue;
       }
       markSeen(orderId);
@@ -367,36 +468,57 @@ class ListenEngine {
       if (filter.enabledItems.isNotEmpty && !_itemDecisionLogged) {
         _itemDecisionLogged = true;
         final names = orderItemNames(order);
-        final decision = orderMatchesItems(order, filter.enabledItems,
-            nameMap: filter.itemNameMap,
-            alwaysTypes: filter.itemAlwaysTypes);
-        log(LogLevel.info,
-            '订单类型判定：${names.isEmpty ? '无类型信息' : names.join('、')} → '
-            '${decision == true ? '允许' : decision == false ? '已关闭' : '无法判定，放行'}');
+        final decision = orderMatchesItems(
+          order,
+          filter.enabledItems,
+          nameMap: filter.itemNameMap,
+          alwaysTypes: filter.itemAlwaysTypes,
+        );
+        log(
+          LogLevel.info,
+          '订单类型判定：${names.isEmpty ? '无类型信息' : names.join('、')} → '
+          '${decision == true
+              ? '允许'
+              : decision == false
+              ? '已关闭'
+              : '无法判定，放行'}',
+        );
       }
       if (filter.enabledItems.isNotEmpty &&
-          orderMatchesItems(order, filter.enabledItems,
-                  nameMap: filter.itemNameMap,
-                  alwaysTypes: filter.itemAlwaysTypes) ==
+          orderMatchesItems(
+                order,
+                filter.enabledItems,
+                nameMap: filter.itemNameMap,
+                alwaysTypes: filter.itemAlwaysTypes,
+              ) ==
               null &&
           !_noItemFieldNoted) {
         _noItemFieldNoted = true;
         log(LogLevel.warning, '订单不带类型字段，接单类型联动暂不生效（其他过滤正常）');
       }
       final amount = Order(order).amountYuan;
-      log(LogLevel.info,
-          '检测到新订单：金额 ${amount.toStringAsFixed(2)} 元，客户微信 ${order['userWechatId'] ?? '未知'}');
+      log(
+        LogLevel.info,
+        '检测到新订单：金额 ${amount.toStringAsFixed(2)} 元，客户微信 ${order['userWechatId'] ?? '未知'}',
+      );
       final check = filter.check(order);
       if (!check.passed) {
         log(LogLevel.info, '订单不符合要求：${check.reason}');
         _speak(check.reason);
         continue; // re-poll immediately
       }
-      final outcome = await handleOrder(order, orderId, phone, password);
+      final outcome = await handleOrder(
+        order,
+        orderId,
+        phone,
+        password,
+        runGeneration: runGeneration,
+      );
+      if (!_isRunActive(runGeneration)) return;
       if (outcome == ConfirmTaskOutcome.busy) {
         final cooldown = config.busyCooldownSec;
         log(LogLevel.info, '等待 ${cooldown.toStringAsFixed(0)} 秒后继续（等店铺释放接单名额）');
-        if (!await sleep(cooldown)) return;
+        if (!await sleep(cooldown, runGeneration: runGeneration)) return;
         continue;
       }
     }
@@ -407,17 +529,37 @@ class ListenEngine {
   /// One confirm task; reports exactly one [onOutcome] for every
   /// terminal outcome except `cancelled` (and except `success` when
   /// the same order was already reported by [onGrab] — §1.6 dedup).
-  Future<ConfirmTaskOutcome> handleOrder(Map<String, dynamic> order,
-      String orderId, String phone, String password) async {
-    final result = await confirmTask(order, orderId, phone, password);
+  Future<ConfirmTaskOutcome> handleOrder(
+    Map<String, dynamic> order,
+    String orderId,
+    String phone,
+    String password, {
+    int? runGeneration,
+  }) async {
+    final result = await confirmTask(
+      order,
+      orderId,
+      phone,
+      password,
+      runGeneration: runGeneration,
+    );
+    // A successful confirm calls [stop] when auto-stop is enabled. Preserve
+    // that terminal result even though the run generation has advanced.
+    if (result.outcome != ConfirmTaskOutcome.ok &&
+        !_isRunActive(runGeneration)) {
+      return ConfirmTaskOutcome.cancelled;
+    }
     if (result.outcome != ConfirmTaskOutcome.cancelled) {
       _emitOutcome(order, result.outcome, result.reason);
     }
     return result.outcome;
   }
 
-  void _emitOutcome(Map<String, dynamic> order, ConfirmTaskOutcome outcome,
-      String reason) {
+  void _emitOutcome(
+    Map<String, dynamic> order,
+    ConfirmTaskOutcome outcome,
+    String reason,
+  ) {
     if (onOutcome == null) return;
     final mapped = historyOutcomeFor(outcome);
     if (mapped == null) return;
@@ -427,8 +569,7 @@ class ListenEngine {
       final key = '${Order(order).no}|${Order(order).id}';
       if (_grabbedKeys.contains(key)) return;
     }
-    final finalReason =
-        reason.isNotEmpty ? reason : defaultReasonFor(mapped);
+    final finalReason = reason.isNotEmpty ? reason : defaultReasonFor(mapped);
     try {
       onOutcome!(order, mapped, finalReason);
     } catch (_) {
@@ -437,34 +578,53 @@ class ListenEngine {
   }
 
   Future<({ReconcileVerdict verdict, String reason})> readback(
-      String orderId) async {
+    String orderId, {
+    int? runGeneration,
+  }) async {
     try {
-      final response =
-          await client.orderGet(orderId, session: _session, timeoutSec: 15);
+      final response = await client.orderGet(
+        orderId,
+        session: _session,
+        timeoutSec: 15,
+      );
+      if (!_isRunActive(runGeneration)) {
+        return (verdict: ReconcileVerdict.unknown, reason: '');
+      }
       return reconcileOrder(response, _ownClerkId());
     } on ApiError catch (e) {
+      if (!_isRunActive(runGeneration)) {
+        return (verdict: ReconcileVerdict.unknown, reason: '');
+      }
       log(LogLevel.warning, '订单状态查询失败 id=$orderId：${e.message}');
       return (verdict: ReconcileVerdict.unknown, reason: '');
     }
   }
 
-  Future<bool> _sleepRetry(Duration deadlineMono) async {
+  Future<bool> _sleepRetry(Duration deadlineMono, {int? runGeneration}) async {
     final delay = config.confirmRetryDelaySec;
     final remaining = deadlineMono - _monotonic();
     final wait = delay < remaining.inMicroseconds / 1e6
         ? delay
         : (remaining.inMicroseconds / 1e6).clamp(0.0, double.infinity);
-    return sleep(wait);
+    return sleep(wait, runGeneration: runGeneration);
   }
 
   /// The confirm loop itself (§3.8). Returns the task outcome + reason.
   @visibleForTesting
-  Future<ConfirmTaskResult> confirmTask(Map<String, dynamic> order,
-      String orderId, String phone, String password) async {
-    final budget = confirmBudgetSeconds(order, config.randomConfirmWindowSec,
-        config.randomConfirmFallbackSec);
-    final deadlineMono = _monotonic() +
-        Duration(milliseconds: (budget * 1000).round());
+  Future<ConfirmTaskResult> confirmTask(
+    Map<String, dynamic> order,
+    String orderId,
+    String phone,
+    String password, {
+    int? runGeneration,
+  }) async {
+    final budget = confirmBudgetSeconds(
+      order,
+      config.randomConfirmWindowSec,
+      config.randomConfirmFallbackSec,
+    );
+    final deadlineMono =
+        _monotonic() + Duration(milliseconds: (budget * 1000).round());
     final amount = Order(order).amountYuan;
     final number = order['no']?.toString() ?? orderId;
     log(LogLevel.info, '尝试接单 $number ￥${amount.toStringAsFixed(2)}');
@@ -476,12 +636,12 @@ class ListenEngine {
     );
     if (wait > 0) {
       log(LogLevel.info, '确认前等待 ${wait.toStringAsFixed(2)} 秒');
-      if (!await sleep(wait)) {
+      if (!await sleep(wait, runGeneration: runGeneration)) {
         return (outcome: ConfirmTaskOutcome.cancelled, reason: '');
       }
     }
     var confirmCalls = 0;
-    while (!_stopped) {
+    while (_isRunActive(runGeneration)) {
       final remaining = deadlineMono - _monotonic();
       if (remaining <= Duration.zero) break;
       final timeout = [
@@ -493,25 +653,40 @@ class ListenEngine {
       Map<String, dynamic> result;
       try {
         confirmCalls += 1;
-        result = await client.orderConfirm(orderId,
-            session: _session, timeoutSec: timeout);
+        result = await client.orderConfirm(
+          orderId,
+          session: _session,
+          timeoutSec: timeout,
+        );
+        if (!_isRunActive(runGeneration)) {
+          return (outcome: ConfirmTaskOutcome.cancelled, reason: '');
+        }
       } on ApiError catch (e) {
+        if (!_isRunActive(runGeneration)) {
+          return (outcome: ConfirmTaskOutcome.cancelled, reason: '');
+        }
         if (e.kind == ApiErrorKind.auth) {
           releaseSeen(orderId);
           log(LogLevel.warning, '确认认证失败，等待账号单飞刷新: $number');
-          await refreshSession(phone, password);
+          await refreshSession(phone, password, runGeneration: runGeneration);
+          if (!_isRunActive(runGeneration)) {
+            return (outcome: ConfirmTaskOutcome.cancelled, reason: '');
+          }
           return (outcome: ConfirmTaskOutcome.auth, reason: '确认认证失败');
         }
         if (e.kind == ApiErrorKind.ip) {
           releaseSeen(orderId);
           log(LogLevel.warning, '确认触发IP风控，账号共享暂停60s，不重登录');
-          await sleep(60);
+          await sleep(60, runGeneration: runGeneration);
           return (outcome: ConfirmTaskOutcome.ip, reason: 'IP风控');
         }
         if (e.kind == ApiErrorKind.cancelled) {
           return (outcome: ConfirmTaskOutcome.cancelled, reason: '');
         }
-        final read = await readback(orderId);
+        final read = await readback(orderId, runGeneration: runGeneration);
+        if (!_isRunActive(runGeneration)) {
+          return (outcome: ConfirmTaskOutcome.cancelled, reason: '');
+        }
         if (read.verdict == ReconcileVerdict.ok) {
           return _grabSuccess(order, orderId, confirmCalls);
         }
@@ -520,7 +695,7 @@ class ListenEngine {
           return (outcome: ConfirmTaskOutcome.fail, reason: read.reason);
         }
         if (read.verdict == ReconcileVerdict.pending) {
-          if (!await _sleepRetry(deadlineMono)) {
+          if (!await _sleepRetry(deadlineMono, runGeneration: runGeneration)) {
             return (outcome: ConfirmTaskOutcome.cancelled, reason: '');
           }
           continue;
@@ -538,8 +713,7 @@ class ListenEngine {
       if (classified.outcome == ConfirmOutcome.busy) {
         final cap = busyCapFrom(classified.reason);
         if (cap != null) {
-          log(LogLevel.warning,
-              '⛔ 已达同时接单上限（$cap 单），本次跳过；完成一单后可继续');
+          log(LogLevel.warning, '⛔ 已达同时接单上限（$cap 单），本次跳过；完成一单后可继续');
         } else {
           log(LogLevel.warning, '⛔ 同时接单数已满，本次跳过: ${classified.reason}');
         }
@@ -547,30 +721,34 @@ class ListenEngine {
       }
       if (classified.outcome == ConfirmOutcome.fail) {
         log(LogLevel.warning, '✗ 确认终态失败 $number: ${classified.reason}');
-        return (
-          outcome: ConfirmTaskOutcome.fail,
-          reason: classified.reason,
-        );
+        return (outcome: ConfirmTaskOutcome.fail, reason: classified.reason);
       }
       if (confirmCalls == 1 || confirmCalls % 10 == 0) {
-        log(LogLevel.info,
-            '[confirm] retry $number confirm_calls=$confirmCalls reason=${classified.reason}');
+        log(
+          LogLevel.info,
+          '[confirm] retry $number confirm_calls=$confirmCalls reason=${classified.reason}',
+        );
       }
-      if (!await _sleepRetry(deadlineMono)) {
+      if (!await _sleepRetry(deadlineMono, runGeneration: runGeneration)) {
         return (outcome: ConfirmTaskOutcome.cancelled, reason: '');
       }
     }
-    if (_stopped) {
+    if (!_isRunActive(runGeneration)) {
       return (outcome: ConfirmTaskOutcome.cancelled, reason: '');
     }
     // Deadline reached: one final verification.
-    final read = await readback(orderId);
+    final read = await readback(orderId, runGeneration: runGeneration);
+    if (!_isRunActive(runGeneration)) {
+      return (outcome: ConfirmTaskOutcome.cancelled, reason: '');
+    }
     if (read.verdict == ReconcileVerdict.ok) {
       return _grabSuccess(order, orderId, confirmCalls);
     }
     if (read.verdict == ReconcileVerdict.fail) {
-      log(LogLevel.warning,
-          '✗ 窗口结束，订单已不可确认: $number confirm_calls=$confirmCalls');
+      log(
+        LogLevel.warning,
+        '✗ 窗口结束，订单已不可确认: $number confirm_calls=$confirmCalls',
+      );
       return (
         outcome: ConfirmTaskOutcome.fail,
         reason: read.reason.isNotEmpty ? read.reason : '订单已不可确认',
@@ -578,28 +756,33 @@ class ListenEngine {
     }
     if (read.verdict == ReconcileVerdict.pending) {
       releaseSeen(orderId);
-      log(LogLevel.info,
-          '↻ 本轮确认预算耗尽，订单仍待确认: $number confirm_calls=$confirmCalls');
-      return (
-        outcome: ConfirmTaskOutcome.pending,
-        reason: '本轮确认预算耗尽，订单仍待确认',
+      log(
+        LogLevel.info,
+        '↻ 本轮确认预算耗尽，订单仍待确认: $number confirm_calls=$confirmCalls',
       );
+      return (outcome: ConfirmTaskOutcome.pending, reason: '本轮确认预算耗尽，订单仍待确认');
     }
-    log(LogLevel.warning,
-        '⚠ 窗口结束，确认结果未知: $number confirm_calls=$confirmCalls');
+    log(LogLevel.warning, '⚠ 窗口结束，确认结果未知: $number confirm_calls=$confirmCalls');
     return (
       outcome: ConfirmTaskOutcome.unknown,
       reason: read.reason.isNotEmpty ? read.reason : '确认结果未知',
     );
   }
 
-  ConfirmTaskResult _grabSuccess(Map<String, dynamic> order, String orderId,
-      int confirmCalls) {
+  ConfirmTaskResult _grabSuccess(
+    Map<String, dynamic> order,
+    String orderId,
+    int confirmCalls,
+  ) {
     final number = order['no']?.toString() ?? orderId;
-    log(LogLevel.success,
-        '✓ 确认成功: $number (id=$orderId) confirm_calls=$confirmCalls');
-    log(LogLevel.success,
-        '抢单成功，请去查看订单，金额 ${Order(order).amountYuan.toStringAsFixed(2)} 元');
+    log(
+      LogLevel.success,
+      '✓ 确认成功: $number (id=$orderId) confirm_calls=$confirmCalls',
+    );
+    log(
+      LogLevel.success,
+      '抢单成功，请去查看订单，金额 ${Order(order).amountYuan.toStringAsFixed(2)} 元',
+    );
     _speak('抢单成功');
     _grabbedKeys.add('${Order(order).no}|${Order(order).id}');
     try {

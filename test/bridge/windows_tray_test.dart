@@ -1,6 +1,8 @@
 /// WindowsTray tests (fake backend; runs on Linux via forceSupported).
 library;
 
+import 'dart:io' show Platform;
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:dpgrabber/bridge/windows_tray.dart';
@@ -52,13 +54,17 @@ class FakeTrayBackend implements TrayBackend {
 }
 
 void main() {
-  test('unsupported platform (Linux host) is a no-op', () async {
+  test('tray support follows the host platform', () async {
     final backend = FakeTrayBackend();
     final tray = WindowsTray(backend: backend);
-    expect(tray.isSupported, isFalse);
+    expect(tray.isSupported, Platform.isWindows);
+    if (Platform.isWindows) return;
     var shown = false;
     var quit = false;
-    await tray.initialize(onShow: () => shown = true, onQuit: () => quit = true);
+    await tray.initialize(
+      onShow: () => shown = true,
+      onQuit: () => quit = true,
+    );
     expect(tray.isInitialized, isFalse);
     expect(backend.initialized, isFalse);
     await tray.minimizeToTray();
@@ -72,7 +78,10 @@ void main() {
     final tray = WindowsTray(backend: backend, forceSupported: true);
     var shown = false;
     var quit = false;
-    await tray.initialize(onShow: () => shown = true, onQuit: () => quit = true);
+    await tray.initialize(
+      onShow: () => shown = true,
+      onQuit: () => quit = true,
+    );
     expect(tray.isInitialized, isTrue);
     expect(backend.initialized, isTrue);
 

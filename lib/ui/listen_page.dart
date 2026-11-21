@@ -15,6 +15,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../bridge/keep_alive.dart' show KeepAliveStatus;
 import '../core.dart';
 import '../theme/app_theme.dart';
 import '../theme/palette.dart';
@@ -65,9 +66,8 @@ class _ListenPageState extends State<ListenPage> {
     } else {
       final ok = await _state.startListening();
       if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_state.lastError ?? '启动失败')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(_state.lastError ?? '启动失败')));
       }
     }
   }
@@ -78,359 +78,390 @@ class _ListenPageState extends State<ListenPage> {
     return AppStateScope(
       state: _state,
       child: AnimatedBuilder(
-      animation: _state,
-      builder: (context, _) {
-        final clerk = _state.clerk;
-        final stats = _state.weekStats;
-        final renewal = stats?.renewalRate;
-        final entries = _state.history();
-        final last = entries.isEmpty ? null : entries.last;
-        final counts = _state.todayCounts;
-        final listenLabel = _state.listening
-            ? '监听中'
-            : (last == null ? '未开始监听' : '已停止');
-        final loginLabel = _loginLabel(_state);
-        return Scaffold(
-          appBar: AppBar(title: const Text('监听')),
-          body: ListView(
-            // The floating pill overlays the body: reserve its height
-            // (plus air) at the bottom so the log section clears it.
-            padding: EdgeInsets.fromLTRB(
-              16,
-              16,
-              16,
-              16 + bottomNavClearance(context),
-            ),
-            children: [
-              // Hero: title + today count + listen/login status.
-              // A plain card, not a saturated gradient band (design
-              // reference: restrained hierarchy, tint-derived surfaces).
-              AppCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '今日抢单 ${_state.todaySuccessCount}',
-                            style: TextStyle(
-                              color: palette.textDark,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        if (renewal != null)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: renewal >= renewalTarget
-                                  ? const Color(0xFF7BD88F)
-                                  : const Color(0xFFFFB4A8),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              '${renewal >= renewalTarget ? '●' : '○'} '
-                              '续费率 ${renewal.toStringAsFixed(0)}% / 30%',
-                              style: const TextStyle(
-                                color: Colors.black87,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '$listenLabel · $loginLabel',
-                      style: TextStyle(
-                        color: palette.hint,
-                        fontSize: 13,
-                      ),
-                    ),
-                    if (stats != null)
-                      Text(
-                        '本周接单 ${stats.orderCount} · '
-                        '续单率 ${stats.orderRate?.toStringAsFixed(0) ?? '—'}%',
-                        style: TextStyle(
-                          color: palette.hint,
-                          fontSize: 13,
-                        ),
-                      ),
-                  ],
-                ),
+        animation: _state,
+        builder: (context, _) {
+          final clerk = _state.clerk;
+          final stats = _state.weekStats;
+          final renewal = stats?.renewalRate;
+          final entries = _state.history();
+          final last = entries.isEmpty ? null : entries.last;
+          final counts = _state.todayCounts;
+          final listenLabel = _state.listening
+              ? '监听中'
+              : (last == null ? '未开始监听' : '已停止');
+          final loginLabel = _loginLabel(_state);
+          final keepAliveStatus = _state.keepAliveStatus;
+          return Scaffold(
+            appBar: AppBar(title: const Text('监听')),
+            body: ListView(
+              // The floating pill overlays the body: reserve its height
+              // (plus air) at the bottom so the log section clears it.
+              padding: EdgeInsets.fromLTRB(
+                16,
+                16,
+                16,
+                16 + bottomNavClearance(context),
               ),
-              const SizedBox(height: 12),
-              // Clerk / account card.
-              AppCard(
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      backgroundColor: palette.accent,
-                      foregroundColor: Colors.white,
-                      backgroundImage: _state.avatarPath.isNotEmpty
-                          ? FileImage(File(_state.avatarPath))
-                          : null,
-                      child: _state.avatarPath.isEmpty
-                          ? Text(
-                              _clerkDisplayName.isEmpty
-                                  ? '多'
-                                  : _clerkDisplayName.characters.first
-                                      .toUpperCase(),
-                            )
-                          : null,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _clerkDisplayName,
-                            style: TextStyle(
-                              color: palette.textDark,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          Text(
-                            _state.currentPhone.isEmpty
-                                ? '未登录'
-                                : maskPhone(_state.currentPhone),
-                            style: TextStyle(
-                              color: palette.hint,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (clerk != null && clerk.id > 0)
-                      Text(
-                        'ID：${clerk.id}',
-                        style: TextStyle(color: palette.hint, fontSize: 12),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              // Start / stop — wenxi liquid glass button.
-              Row(
-                children: [
-                  Expanded(
-                    child: LiquidGlassButton(
-                      onPressed: _toggleListening,
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _state.listening
-                                ? Icons.stop
-                                : Icons.play_arrow,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _state.listening ? '停止监听' : '开始监听',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              CheckRow(
-                label: '接到单后自动停止监听',
-                value: _state.config.autoStopAfterGrab,
-                onChanged: (v) async {
-                  if (v == null) return;
-                  await _state.updateConfig(
-                    _state.config.copyWith(autoStopAfterGrab: v),
-                  );
-                },
-              ),
-              SwitchRow(
-                label: '在线接单',
-                subtitle: _state.online ? '当前在线' : '当前离线',
-                value: _state.online,
-                onChanged: (v) async {
-                  final ok = await _state.setOnline(v);
-                  if (!ok && context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('在线状态切换失败，已回滚')),
-                    );
-                  }
-                },
-              ),
-              // Item-type switches (§6.5).
-              if (_state.itemSwitchKnown && _state.itemSwitchNames.isNotEmpty)
+              children: [
+                // Hero: title + today count + listen/login status.
+                // A plain card, not a saturated gradient band (design
+                // reference: restrained hierarchy, tint-derived surfaces).
                 AppCard(
-                  margin: const EdgeInsets.only(top: 8),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '接单类型',
-                        style: TextStyle(
-                          color: palette.textDark,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      for (final entry in _state.itemSwitchNames.entries)
-                        CheckRow(
-                          label:
-                              '${entry.value}（${entry.key}）',
-                          value: _state.itemSwitchIds.contains(entry.key),
-                          onChanged: (v) async {
-                            if (v == null) return;
-                            final ok = await _state.toggleItemSwitch(
-                              entry.key,
-                              v,
-                            );
-                            if (!ok && context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('接单类型切换失败，已回滚'),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '今日抢单 ${_state.todaySuccessCount}',
+                              style: TextStyle(
+                                color: palette.textDark,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          if (renewal != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: renewal >= renewalTarget
+                                    ? const Color(0xFF7BD88F)
+                                    : const Color(0xFFFFB4A8),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                '${renewal >= renewalTarget ? '●' : '○'} '
+                                '续费率 ${renewal.toStringAsFixed(0)}% / 30%',
+                                style: const TextStyle(
+                                  color: Colors.black87,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
                                 ),
-                              );
-                            }
-                          },
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '$listenLabel · $loginLabel',
+                        style: TextStyle(color: palette.hint, fontSize: 13),
+                      ),
+                      if (_state.listening) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            _pollDiagnosticLabel(_state),
+                            style: TextStyle(color: palette.hint, fontSize: 12),
+                          ),
+                        ),
+                        Text(
+                          '本进程内 Dart 请求累计：'
+                          '${_state.completedPollCount} 成功 · '
+                          '${_state.failedPollCount} 失败',
+                          style: TextStyle(color: palette.hint, fontSize: 12),
+                        ),
+                        Text(
+                          '应用状态：${_state.lastLifecycleState?.name ?? '未知'}'
+                          '（${_diagnosticTime(_state.lastLifecycleChangeAt)}） · '
+                          '后台 ${_diagnosticTime(_state.lastBackgroundedAt)} · '
+                          '恢复 ${_diagnosticTime(_state.lastResumedAt)}',
+                          style: TextStyle(color: palette.hint, fontSize: 12),
+                        ),
+                        Text(
+                          '这些是当前进程的点位记录；音频图运行不代表 Dart 轮询持续执行。',
+                          style: TextStyle(color: palette.hint, fontSize: 12),
+                        ),
+                      ],
+                      if (Platform.isIOS && _state.listening)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            '后台音频：${_keepAliveStateLabel(keepAliveStatus)}'
+                            '${_keepAliveReasonLabel(keepAliveStatus?.reason)} · '
+                            'iOS 仍可能暂停后台执行',
+                            style: TextStyle(
+                              color: keepAliveStatus?.isRunning == true
+                                  ? palette.hint
+                                  : palette.accent,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      if (stats != null)
+                        Text(
+                          '本周接单 ${stats.orderCount} · '
+                          '续单率 ${stats.orderRate?.toStringAsFixed(0) ?? '—'}%',
+                          style: TextStyle(color: palette.hint, fontSize: 13),
                         ),
                     ],
                   ),
-                )
-              else
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    '接单类型：登录后显示',
-                    style: TextStyle(color: palette.hint, fontSize: 12),
-                  ),
                 ),
-              // Week statistics (§10.8).
-              const SectionTitle('本周统计'),
-              AppCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (_state.weekStatsLoading)
-                      const LinearProgressIndicator()
-                    else if (stats != null) ...[
-                      Text(
-                        '本周接单 ${stats.orderCount} · '
-                        '续费率 ${stats.renewalRate?.toStringAsFixed(1) ?? '—'}% · '
-                        '续单率 ${stats.orderRate?.toStringAsFixed(1) ?? '—'}% · '
-                        '续客率 ${stats.userRate?.toStringAsFixed(1) ?? '—'}%',
-                        style: TextStyle(color: palette.textDark),
+                const SizedBox(height: 12),
+                // Clerk / account card.
+                AppCard(
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        backgroundColor: palette.accent,
+                        foregroundColor: Colors.white,
+                        backgroundImage: _state.avatarPath.isNotEmpty
+                            ? FileImage(File(_state.avatarPath))
+                            : null,
+                        child: _state.avatarPath.isEmpty
+                            ? Text(
+                                _clerkDisplayName.isEmpty
+                                    ? '多'
+                                    : _clerkDisplayName.characters.first
+                                          .toUpperCase(),
+                              )
+                            : null,
                       ),
-                      const SizedBox(height: 6),
-                      for (final line in stats.detailLines())
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _clerkDisplayName,
+                              style: TextStyle(
+                                color: palette.textDark,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              _state.currentPhone.isEmpty
+                                  ? '未登录'
+                                  : maskPhone(_state.currentPhone),
+                              style: TextStyle(
+                                color: palette.hint,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (clerk != null && clerk.id > 0)
                         Text(
-                          line,
+                          'ID：${clerk.id}',
                           style: TextStyle(color: palette.hint, fontSize: 12),
                         ),
-                    ] else if (_state.weekFallbackTotal != null)
-                      Text(
-                        '本周统计为空，改用订单总数：${_state.weekFallbackTotal}',
-                        style: TextStyle(color: palette.hint),
-                      )
-                    else
-                      Text(
-                        '暂无本周统计',
-                        style: TextStyle(color: palette.hint),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // Start / stop — wenxi liquid glass button.
+                Row(
+                  children: [
+                    Expanded(
+                      child: LiquidGlassButton(
+                        onPressed: _toggleListening,
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 14,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _state.listening ? Icons.stop : Icons.play_arrow,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _state.listening ? '停止监听' : '开始监听',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    const SizedBox(height: 8),
-                    OutlinedButton(
-                      onPressed: _state.weekStatsLoading
-                          ? null
-                          : () => unawaited(_state.refreshWeekStats()),
-                      child: const Text('刷新本周统计'),
                     ),
                   ],
                 ),
-              ),
-              // Last order + today counts.
-              const SectionTitle('最近一单'),
-              AppCard(
-                child: last == null
-                    ? Text(
-                        '暂无记录\n抢到单后会显示在这里',
-                        style: TextStyle(color: palette.hint),
-                      )
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  '${last.grabbedAt}   ¥${last.amount.toStringAsFixed(2)}',
-                                  style: TextStyle(color: palette.textDark),
-                                ),
-                              ),
-                              OutcomeChip(last.outcome),
-                            ],
+                CheckRow(
+                  label: '接到单后自动停止监听',
+                  value: _state.config.autoStopAfterGrab,
+                  onChanged: (v) async {
+                    if (v == null) return;
+                    await _state.updateConfig(
+                      _state.config.copyWith(autoStopAfterGrab: v),
+                    );
+                  },
+                ),
+                SwitchRow(
+                  label: '在线接单',
+                  subtitle: _state.online ? '当前在线' : '当前离线',
+                  value: _state.online,
+                  onChanged: (v) async {
+                    final ok = await _state.setOnline(v);
+                    if (!ok && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('在线状态切换失败，已回滚')),
+                      );
+                    }
+                  },
+                ),
+                // Item-type switches (§6.5).
+                if (_state.itemSwitchKnown && _state.itemSwitchNames.isNotEmpty)
+                  AppCard(
+                    margin: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '接单类型',
+                          style: TextStyle(
+                            color: palette.textDark,
+                            fontWeight: FontWeight.w600,
                           ),
-                          const SizedBox(height: 4),
+                        ),
+                        for (final entry in _state.itemSwitchNames.entries)
+                          CheckRow(
+                            label: '${entry.value}（${entry.key}）',
+                            value: _state.itemSwitchIds.contains(entry.key),
+                            onChanged: (v) async {
+                              if (v == null) return;
+                              final ok = await _state.toggleItemSwitch(
+                                entry.key,
+                                v,
+                              );
+                              if (!ok && context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('接单类型切换失败，已回滚')),
+                                );
+                              }
+                            },
+                          ),
+                      ],
+                    ),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      '接单类型：登录后显示',
+                      style: TextStyle(color: palette.hint, fontSize: 12),
+                    ),
+                  ),
+                // Week statistics (§10.8).
+                const SectionTitle('本周统计'),
+                AppCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_state.weekStatsLoading)
+                        const LinearProgressIndicator()
+                      else if (stats != null) ...[
+                        Text(
+                          '本周接单 ${stats.orderCount} · '
+                          '续费率 ${stats.renewalRate?.toStringAsFixed(1) ?? '—'}% · '
+                          '续单率 ${stats.orderRate?.toStringAsFixed(1) ?? '—'}% · '
+                          '续客率 ${stats.userRate?.toStringAsFixed(1) ?? '—'}%',
+                          style: TextStyle(color: palette.textDark),
+                        ),
+                        const SizedBox(height: 6),
+                        for (final line in stats.detailLines())
                           Text(
-                            last.reason.isNotEmpty
-                                ? '原因：${last.reason}'
-                                : '订单号 ${last.no}',
+                            line,
                             style: TextStyle(color: palette.hint, fontSize: 12),
                           ),
-                        ],
+                      ] else if (_state.weekFallbackTotal != null)
+                        Text(
+                          '本周统计为空，改用订单总数：${_state.weekFallbackTotal}',
+                          style: TextStyle(color: palette.hint),
+                        )
+                      else
+                        Text('暂无本周统计', style: TextStyle(color: palette.hint)),
+                      const SizedBox(height: 8),
+                      OutlinedButton(
+                        onPressed: _state.weekStatsLoading
+                            ? null
+                            : () => unawaited(_state.refreshWeekStats()),
+                        child: const Text('刷新本周统计'),
                       ),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  '今日成功 ${counts[HistoryOutcome.success] ?? 0} · '
-                  '失败 ${counts[HistoryOutcome.failed] ?? 0} · '
-                  '跳过 ${counts[HistoryOutcome.skipped] ?? 0} · '
-                  '未知 ${counts[HistoryOutcome.unknown] ?? 0}',
-                  style: TextStyle(color: palette.hint, fontSize: 12),
+                    ],
+                  ),
                 ),
-              ),
-              // Run log.
-              SectionTitle(
-                '运行日志',
-                trailing: TextButton(
-                  onPressed: () => _state.logs.clear(),
-                  child: const Text('清空日志'),
+                // Last order + today counts.
+                const SectionTitle('最近一单'),
+                AppCard(
+                  child: last == null
+                      ? Text(
+                          '暂无记录\n抢到单后会显示在这里',
+                          style: TextStyle(color: palette.hint),
+                        )
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '${last.grabbedAt}   ¥${last.amount.toStringAsFixed(2)}',
+                                    style: TextStyle(color: palette.textDark),
+                                  ),
+                                ),
+                                OutcomeChip(last.outcome),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              last.reason.isNotEmpty
+                                  ? '原因：${last.reason}'
+                                  : '订单号 ${last.no}',
+                              style: TextStyle(
+                                color: palette.hint,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
                 ),
-              ),
-              _LogView(
-                logs: _state.logs,
-                scrollController: _logScroll,
-                onUserScroll: (atBottom) => _stickToBottom = atBottom,
-                onChanged: _afterLogChange,
-              ),
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  '日志只保存在内存中，退出 App 即清空。',
-                  style: TextStyle(color: palette.hint, fontSize: 12),
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    '今日成功 ${counts[HistoryOutcome.success] ?? 0} · '
+                    '失败 ${counts[HistoryOutcome.failed] ?? 0} · '
+                    '跳过 ${counts[HistoryOutcome.skipped] ?? 0} · '
+                    '未知 ${counts[HistoryOutcome.unknown] ?? 0}',
+                    style: TextStyle(color: palette.hint, fontSize: 12),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 24),
-            ],
-          ),
-        );
-      },
-    ),
+                // Run log.
+                SectionTitle(
+                  '运行日志',
+                  trailing: TextButton(
+                    onPressed: () => _state.logs.clear(),
+                    child: const Text('清空日志'),
+                  ),
+                ),
+                _LogView(
+                  logs: _state.logs,
+                  scrollController: _logScroll,
+                  onUserScroll: (atBottom) => _stickToBottom = atBottom,
+                  onChanged: _afterLogChange,
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    '日志只保存在内存中，退出 App 即清空。',
+                    style: TextStyle(color: palette.hint, fontSize: 12),
+                  ),
+                ),
+                const SizedBox(height: 24),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -465,17 +496,13 @@ class _LogView extends StatelessWidget {
           ),
           child: entries.isEmpty
               ? Center(
-                  child: Text(
-                    '暂无日志',
-                    style: TextStyle(color: palette.hint),
-                  ),
+                  child: Text('暂无日志', style: TextStyle(color: palette.hint)),
                 )
               : NotificationListener<ScrollNotification>(
                   onNotification: (n) {
                     if (n is ScrollUpdateNotification) {
                       final atBottom =
-                          n.metrics.pixels >=
-                              n.metrics.maxScrollExtent - 20;
+                          n.metrics.pixels >= n.metrics.maxScrollExtent - 20;
                       onUserScroll(atBottom);
                     }
                     return false;
@@ -550,4 +577,62 @@ String _loginLabel(AppState state) {
     return '同步中…';
   }
   return '未登录';
+}
+
+String _keepAliveStateLabel(KeepAliveStatus? status) {
+  return switch (status?.state) {
+    'running' => '运行中',
+    'recovering' => '恢复中',
+    'interrupted' => '中断',
+    'failed' => '恢复失败',
+    'stopped' => '未运行',
+    _ => '状态未知',
+  };
+}
+
+String _keepAliveReasonLabel(String? reason) {
+  if (reason == null) return '';
+  return switch (reason) {
+    'callActive' => '（通话占用）',
+    'interruption' => '（系统音频中断）',
+    'resumeNotRequested' => '（等待返回前台）',
+    'mediaServicesReset' || 'mediaServicesLost' => '（等待音频服务恢复）',
+    'retryLimitExceeded' => '（重试次数已用尽）',
+    'audioSessionFailed' => '（音频会话失败）',
+    'audioEngineFailed' || 'audioNotRunning' => '（音频引擎未运行）',
+    _ => '',
+  };
+}
+
+String _pollDiagnosticLabel(AppState state) {
+  final inFlightAt = state.currentPollStartedAt;
+  if (inFlightAt != null) {
+    return 'Dart 轮询：randomList 请求进行中，开始 ${_diagnosticTime(inFlightAt)}';
+  }
+  final completedAt = state.lastPollAt;
+  if (completedAt == null) return 'Dart 轮询：尚无 randomList 完成记录';
+  final outcome = state.lastPollSucceeded == true ? '成功' : '失败';
+  final durationMs = state.lastPollDuration?.inMilliseconds;
+  final durationLabel = durationMs == null ? '' : ' · $durationMs ms';
+  return 'Dart 轮询：上次 randomList $outcome · '
+      '开始 ${_diagnosticTime(state.lastPollStartedAt)} · '
+      '完成 ${_diagnosticTime(completedAt)}$durationLabel';
+}
+
+String _diagnosticTime(DateTime? time) {
+  if (time == null) return '尚无';
+  final local = time.toLocal();
+  final offset = local.timeZoneOffset;
+  final sign = offset.isNegative ? '-' : '+';
+  final minutes = offset.inMinutes.abs();
+  final zone =
+      '$sign${(minutes ~/ 60).toString().padLeft(2, '0')}:'
+      '${(minutes % 60).toString().padLeft(2, '0')}';
+  return '${local.year.toString().padLeft(4, '0')}-'
+      '${local.month.toString().padLeft(2, '0')}-'
+      '${local.day.toString().padLeft(2, '0')} '
+      '${local.hour.toString().padLeft(2, '0')}:'
+      '${local.minute.toString().padLeft(2, '0')}:'
+      '${local.second.toString().padLeft(2, '0')}.'
+      '${local.millisecond.toString().padLeft(3, '0')} UTC$zone';
 }

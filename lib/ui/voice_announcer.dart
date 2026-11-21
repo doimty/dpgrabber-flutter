@@ -8,10 +8,13 @@
 /// touches a platform channel (safe in widget tests).
 library;
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter_tts/flutter_tts.dart';
 
 class VoiceAnnouncer {
   FlutterTts? _tts;
+  Future<void>? _configureFuture;
   bool enabled;
 
   VoiceAnnouncer({this.enabled = true});
@@ -21,6 +24,24 @@ class VoiceAnnouncer {
     return tts;
   }
 
+  Future<void> _ensureConfigured(FlutterTts tts) {
+    return _configureFuture ??= _configure(tts);
+  }
+
+  Future<void> _configure(FlutterTts tts) async {
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      // flutter_tts defaults to deactivating a shared AVAudioSession after
+      // speech when its category is duckOthers. Keep session ownership with
+      // AudioKeepAlive so a successful announcement cannot drop background
+      // audio execution.
+      try {
+        await tts.autoStopSharedSession(false);
+      } catch (_) {
+        // TTS remains best-effort if the native plugin lacks this method.
+      }
+    }
+  }
+
   /// Speak [text], interrupting anything currently speaking (iOS
   /// parity: interrupt before speaking). No-op when disabled or empty.
   /// Never throws.
@@ -28,6 +49,7 @@ class VoiceAnnouncer {
     if (!enabled || text.isEmpty) return;
     try {
       final tts = _ensure();
+      await _ensureConfigured(tts);
       await tts.stop();
       await tts.setLanguage('zh-CN');
       await tts.setSpeechRate(0.52);

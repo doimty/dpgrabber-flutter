@@ -862,6 +862,37 @@ void main() {
       expect(find.text('清空日志'), findsOneWidget);
       expect(find.textContaining('今日成功'), findsOneWidget);
     });
+
+    testWidgets('shows completed Dart poll and lifecycle diagnostics',
+        (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      state.listening = true;
+      state.currentPollStartedAt = DateTime.utc(2026, 11, 21, 3, 4, 4);
+
+      await tester.pumpWidget(_wrap(state, ListenPage(state: state)));
+      await tester.pumpAndSettle();
+      expect(
+          find.textContaining('Dart 轮询：randomList 请求进行中'), findsOneWidget);
+
+      state.currentPollStartedAt = null;
+      state.lastPollStartedAt = DateTime.utc(2026, 11, 21, 3, 4, 4);
+      state.lastPollAt = DateTime.utc(2026, 11, 21, 3, 4, 5);
+      state.lastPollDuration = const Duration(milliseconds: 850);
+      state.lastPollSucceeded = true;
+      state.completedPollCount = 7;
+      state.failedPollCount = 2;
+      state.didChangeAppLifecycleState(AppLifecycleState.paused);
+      state.didChangeAppLifecycleState(AppLifecycleState.resumed);
+
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Dart 轮询：上次 randomList 成功'), findsOneWidget);
+      expect(find.textContaining('850 ms'), findsOneWidget);
+      expect(find.text('本进程内 Dart 请求累计：7 成功 · 2 失败'), findsOneWidget);
+      expect(find.textContaining('应用状态：resumed'), findsOneWidget);
+      expect(find.textContaining('后台'), findsOneWidget);
+      expect(find.textContaining('恢复'), findsOneWidget);
+    });
   });
 
   group('settings page', () {

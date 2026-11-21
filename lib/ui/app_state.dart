@@ -31,6 +31,8 @@ import 'dart:io' hide BytesBuilder;
 import 'dart:typed_data' show BytesBuilder;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart'
+    show AppLifecycleState, WidgetsBinding, WidgetsBindingObserver;
 
 import '../bridge/bridge.dart';
 import '../background/background_repository.dart';
@@ -47,7 +49,7 @@ import 'voice_announcer.dart';
 /// never silently assumed to work.
 typedef LocalNotifyFn = Future<void> Function(String title, String body);
 
-class AppState extends ChangeNotifier {
+class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final Directory appDir;
   final CredentialStore store;
   final AccountStore accounts;
@@ -101,6 +103,18 @@ class AppState extends ChangeNotifier {
   String avatarPath = '';
   bool listening = false;
   String? lastError;
+  KeepAliveStatus? keepAliveStatus;
+  DateTime? currentPollStartedAt;
+  DateTime? lastPollStartedAt;
+  DateTime? lastPollAt;
+  Duration? lastPollDuration;
+  bool? lastPollSucceeded;
+  int completedPollCount = 0;
+  int failedPollCount = 0;
+  AppLifecycleState? lastLifecycleState;
+  DateTime? lastLifecycleChangeAt;
+  DateTime? lastBackgroundedAt;
+  DateTime? lastResumedAt;
 
   ClerkStatistics? weekStats;
   int? weekFallbackTotal;
@@ -118,6 +132,18 @@ class AppState extends ChangeNotifier {
   Timer? _rotateTimer;
   final Set<String> _recordedGrabKeys = {};
   bool _engineRebuilding = false;
+  int _listenGeneration = 0;
+  bool _listenRequested = false;
+  int _accountGeneration = 0;
+  int _sessionRestoreGeneration = 0;
+  Future<bool>? _startListeningFuture;
+  bool _keepAliveCheckInFlight = false;
+  bool _keepAliveRepairRequested = false;
+  Future<void> _keepAliveQueue = Future<void>.value();
+  bool _lifecycleObserverRegistered = false;
+  bool _disposed = false;
+  bool _accountSwitchInProgress = false;
+  int _accountSwitchGeneration = 0;
 
   AppState({required this.appDir, CredentialStore? store, this._transport})
     : store = store ?? FileCredentialStore(appDir),
@@ -145,6 +171,10 @@ class AppState extends ChangeNotifier {
       historyStore.entriesForAccount(currentPhone, allAccounts: allAccounts);
 
   Future<void> init() async {
+    if (!_lifecycleObserverRegistered) {
+      WidgetsBinding.instance.addObserver(this);
+      _lifecycleObserverRegistered = true;
+    }
     try {
       accounts.migrateLegacy();
     } catch (_) {}
@@ -169,7 +199,7 @@ class AppState extends ChangeNotifier {
     savedAccounts = accounts.listAccounts();
     await background.load();
     initialized = true;
-    notifyListeners();
+    if (!_disposed) notifyListeners();
     // A saved account is not a live session: rebuild it in the
     // background so the listen page never reads "未登录" after a
     // cold start and week stats never 401 on a null session.
@@ -182,7 +212,10 @@ class AppState extends ChangeNotifier {
     final running = engine?.isRunning ?? false;
     if (running != listening) {
       listening = running;
-      notifyListeners();
+      if (!running) {
+        _cancelListeningSupport(stopEngine: false, notify: false);
+      }
+      if (!_disposed) notifyListeners();
     }
   }
 
@@ -215,6 +248,25 @@ class AppState extends ChangeNotifier {
         session = s;
         notifyListeners();
       },
+      onPollStarted: (startedAt) {
+        if (_disposed) return;
+        currentPollStartedAt = startedAt;
+        notifyListeners();
+      },
+      onPoll: (startedAt, completedAt, duration, succeeded) {
+        if (_disposed) return;
+        currentPollStartedAt = null;
+        lastPollStartedAt = startedAt;
+        lastPollAt = completedAt;
+        lastPollDuration = duration;
+        lastPollSucceeded = succeeded;
+        if (succeeded) {
+          completedPollCount++;
+        } else {
+          failedPollCount++;
+        }
+        notifyListeners();
+      },
     );
   }
 
@@ -225,13 +277,13 @@ class AppState extends ChangeNotifier {
     _engineRebuilding = true;
     final wasRunning = engine?.isRunning ?? false;
     engine?.stop();
+    if (wasRunning) {
+      _cancelListeningSupport(stopEngine: false, notify: false);
+    }
     _buildClientAndEngine();
     _engineRebuilding = false;
     if (wasRunning) {
-      logs.add(
-        LogLevel.warning,
-        '密钥/证书设置已变更，监听已停止，请重新开始监听',
-      );
+      logs.add(LogLevel.warning, '密钥/证书设置已变更，监听已停止，请重新开始监听');
     }
   }
 
@@ -241,7 +293,8 @@ class AppState extends ChangeNotifier {
   /// with `AppConfig.fromJson`, which throws [ConfigError] on invalid
   /// values), persist, push to the engine/notifier/theme.
   Future<void> updateConfig(AppConfig next, {bool persist = true}) async {
-    final aesChanged = next.aesKeyHex != config.aesKeyHex ||
+    final aesChanged =
+        next.aesKeyHex != config.aesKeyHex ||
         next.aesIvHex != config.aesIvHex ||
         next.aesKeyHexAlt != config.aesKeyHexAlt ||
         next.aesIvHexAlt != config.aesIvHexAlt ||
@@ -285,24 +338,50 @@ class AppState extends ChangeNotifier {
   /// info and item switches (best effort). Throws [ApiError] on
   /// failure; the caller shows the message.
   Future<Session> login(String phone, String password) async {
+    final accountGeneration = ++_accountGeneration;
+    _sessionFuture = null;
+    _sessionRestoreGeneration++;
+    sessionRestoring = false;
+    _startListeningFuture = null;
     final cleanPhone = phone.trim();
-    final s = await client.sessionForAccount(
+    final activeClient = client;
+    final preferredShopId = config.shopId;
+    final s = await activeClient.sessionForAccount(
       cleanPhone,
       password,
-      preferredShopId: config.shopId,
+      preferredShopId: preferredShopId,
     );
+    if (accountGeneration != _accountGeneration ||
+        !identical(activeClient, client)) {
+      throw const ApiError(ApiErrorKind.cancelled, 'login superseded');
+    }
     session = s;
     loginPhone = FileCredentialStore.digitsOf(cleanPhone);
     _password = password;
     loggedIn = true;
     lastError = null;
     await store.saveAccount(phone: cleanPhone, password: password);
+    _throwIfLoginSuperseded(accountGeneration, activeClient);
     config = config.copyWith(phone: cleanPhone);
     await saveConfig();
+    _throwIfLoginSuperseded(accountGeneration, activeClient);
     savedAccounts = accounts.listAccounts();
     notifyListeners();
-    await _refreshClerkAndSwitches();
+    await _refreshClerkAndSwitches(
+      accountGeneration: accountGeneration,
+      expectedClient: activeClient,
+      expectedSession: s,
+    );
+    _throwIfLoginSuperseded(accountGeneration, activeClient);
     return s;
+  }
+
+  void _throwIfLoginSuperseded(int generation, ApiClient activeClient) {
+    if (_disposed ||
+        generation != _accountGeneration ||
+        !identical(activeClient, client)) {
+      throw const ApiError(ApiErrorKind.cancelled, 'login superseded');
+    }
   }
 
   /// Build (or rebuild) the live session from the saved credentials
@@ -316,6 +395,7 @@ class AppState extends ChangeNotifier {
   /// auto-refresh and start-listening must not each run the full
   /// 6–7 request chain.
   Future<bool> ensureSession() async {
+    if (_accountSwitchInProgress) return false;
     if (session != null) return true;
     final inFlight = _sessionFuture;
     if (inFlight != null) return inFlight;
@@ -327,7 +407,18 @@ class AppState extends ChangeNotifier {
         password.isEmpty) {
       return false;
     }
-    final future = _ensureSessionLocked(phone, password);
+    final generation = _accountGeneration;
+    final restoreGeneration = ++_sessionRestoreGeneration;
+    final activeClient = client;
+    final preferredShopId = config.shopId;
+    final future = _ensureSessionLocked(
+      phone,
+      password,
+      generation,
+      restoreGeneration,
+      activeClient,
+      preferredShopId,
+    );
     _sessionFuture = future;
     try {
       return await future;
@@ -336,25 +427,41 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<bool> _ensureSessionLocked(String phone, String password) async {
+  Future<bool> _ensureSessionLocked(
+    String phone,
+    String password,
+    int accountGeneration,
+    int restoreGeneration,
+    ApiClient activeClient,
+    int preferredShopId,
+  ) async {
     sessionRestoring = true;
     notifyListeners();
     try {
-      final s = await client.sessionForAccount(
+      final s = await activeClient.sessionForAccount(
         phone,
         password,
-        preferredShopId: config.shopId,
+        preferredShopId: preferredShopId,
       );
+      if (accountGeneration != _accountGeneration ||
+          !identical(activeClient, client)) {
+        return false;
+      }
       session = s;
       lastError = null;
       notifyListeners();
       return true;
     } catch (e) {
-      logs.add(LogLevel.warning, '自动登录失败：$e');
+      if (accountGeneration == _accountGeneration &&
+          identical(activeClient, client)) {
+        logs.add(LogLevel.warning, '自动登录失败：$e');
+      }
       return false;
     } finally {
-      sessionRestoring = false;
-      notifyListeners();
+      if (restoreGeneration == _sessionRestoreGeneration) {
+        sessionRestoring = false;
+        if (!_disposed) notifyListeners();
+      }
     }
   }
 
@@ -365,15 +472,32 @@ class AppState extends ChangeNotifier {
   /// refresh the week stats once (the manual button stays as a
   /// retry).
   Future<void> _restoreSessionInBackground() async {
+    final generation = _accountGeneration;
     if (!await ensureSession()) return;
-    await _refreshClerkAndSwitches();
-    unawaited(refreshWeekStats());
+    if (_disposed || generation != _accountGeneration) return;
+    final activeClient = client;
+    final activeSession = session;
+    if (activeSession == null) return;
+    await _refreshClerkAndSwitches(
+      accountGeneration: generation,
+      expectedClient: activeClient,
+      expectedSession: activeSession,
+    );
+    if (!_disposed &&
+        generation == _accountGeneration &&
+        identical(activeClient, client) &&
+        identical(activeSession, session)) {
+      unawaited(refreshWeekStats());
+    }
   }
 
   /// Download and cache the clerk avatar (DPPP `_fetch_avatar`):
   /// source `clerk.avatarUrl`, cached at `<appDir>/avatars/avatar_<id>.png`.
   /// Cosmetic only — never breaks login or listening.
-  Future<void> _refreshAvatar(Clerk clerk) async {
+  Future<void> _refreshAvatar(
+    Clerk clerk, {
+    required int accountGeneration,
+  }) async {
     final url = clerk.avatarUrl ?? '';
     if (!url.startsWith('http://') && !url.startsWith('https://')) return;
     try {
@@ -385,8 +509,7 @@ class AppState extends ChangeNotifier {
         http.connectionTimeout = const Duration(seconds: 15);
         try {
           final req = await http.getUrl(Uri.parse(url));
-          final resp =
-              await req.close().timeout(const Duration(seconds: 15));
+          final resp = await req.close().timeout(const Duration(seconds: 15));
           final builder = BytesBuilder();
           await for (final chunk in resp) {
             builder.add(chunk);
@@ -400,6 +523,7 @@ class AppState extends ChangeNotifier {
         }
       }
       if (await file.exists() && await file.length() > 512) {
+        if (_disposed || accountGeneration != _accountGeneration) return;
         avatarPath = file.path;
         notifyListeners();
       }
@@ -414,14 +538,32 @@ class AppState extends ChangeNotifier {
   /// each fetch's `copyWith` starts from the same config, so writing
   /// them separately would let the later write clobber the earlier
   /// field update.
-  Future<void> _refreshClerkAndSwitches() async {
+  Future<void> _refreshClerkAndSwitches({
+    int? accountGeneration,
+    ApiClient? expectedClient,
+    Session? expectedSession,
+  }) async {
+    final generation = accountGeneration ?? _accountGeneration;
+    final activeClient = expectedClient ?? client;
+    final activeSession = expectedSession ?? session;
+    if (_disposed ||
+        generation != _accountGeneration ||
+        !identical(activeClient, client) ||
+        !identical(activeSession, session)) {
+      return;
+    }
     final results = await Future.wait([
-      _fetchClerk(),
-      _fetchItemSwitches(),
+      _fetchClerk(client: activeClient, session: activeSession),
+      _fetchItemSwitches(client: activeClient, session: activeSession),
     ]);
+    if (_disposed ||
+        generation != _accountGeneration ||
+        !identical(activeClient, client) ||
+        !identical(activeSession, session)) {
+      return;
+    }
     final clerkData = results[0] as ({Clerk? clerk, bool online})?;
-    final switchData =
-        results[1] as ({Map<int, String> names, List<int> ids})?;
+    final switchData = results[1] as ({Map<int, String> names, List<int> ids})?;
     var next = config;
     var changed = false;
     if (clerkData != null) {
@@ -429,7 +571,7 @@ class AppState extends ChangeNotifier {
       online = clerkData.online;
       final found = clerkData.clerk;
       if (found != null && found.id > 0) {
-        unawaited(_refreshAvatar(found));
+        unawaited(_refreshAvatar(found, accountGeneration: generation));
         final name = found.name ?? config.clerkName;
         if (name != config.clerkName || found.id != config.clerkId) {
           next = next.copyWith(clerkName: name, clerkId: found.id);
@@ -445,8 +587,7 @@ class AppState extends ChangeNotifier {
         itemSwitchIds: switchData.ids,
         itemSwitchKnown: true,
         itemSwitchNames: {
-          for (final e in switchData.names.entries)
-            e.key.toString(): e.value,
+          for (final e in switchData.names.entries) e.key.toString(): e.value,
         },
       );
       changed = true;
@@ -454,14 +595,23 @@ class AppState extends ChangeNotifier {
     if (changed) {
       config = next;
       await saveConfig();
+      if (_disposed ||
+          generation != _accountGeneration ||
+          !identical(activeClient, client) ||
+          !identical(activeSession, session)) {
+        return;
+      }
     }
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   /// Fetch the clerk (reusing the login probe's clerk/get response
   /// when it was captured for this session, so a cold start does not
   /// call clerk/get twice). Returns null on failure (logged).
-  Future<({Clerk? clerk, bool online})?> _fetchClerk() async {
+  Future<({Clerk? clerk, bool online})?> _fetchClerk({
+    required ApiClient client,
+    required Session? session,
+  }) async {
     final s = session;
     if (s == null) return null;
     try {
@@ -482,8 +632,10 @@ class AppState extends ChangeNotifier {
   /// Fetch the item-type switch list. Returns null on failure
   /// (logged); an empty-but-successful response still counts as
   /// known, exactly like the old sequential code.
-  Future<({Map<int, String> names, List<int> ids})?>
-      _fetchItemSwitches() async {
+  Future<({Map<int, String> names, List<int> ids})?> _fetchItemSwitches({
+    required ApiClient client,
+    required Session? session,
+  }) async {
     try {
       final raw = await client.itemSwitchList(session: session);
       final list = raw['itemSwitchList'];
@@ -492,8 +644,7 @@ class AppState extends ChangeNotifier {
         if (list is List)
           for (final item in list)
             if (item is Map && item['id'] is num)
-              (item['id'] as num).toInt():
-                  (item['name'] ?? '').toString(),
+              (item['id'] as num).toInt(): (item['name'] ?? '').toString(),
       };
       final ids = <int>[
         if (enabled is List)
@@ -510,36 +661,48 @@ class AppState extends ChangeNotifier {
   /// Switch to a saved account: loads its config + credentials and
   /// re-logs in. Returns false (with [lastError] set) on failure.
   Future<bool> switchAccount(String phone) async {
+    _invalidateAccountWork();
+    final switchOperation = ++_accountSwitchGeneration;
+    _accountSwitchInProgress = true;
+    final switchGeneration = _accountGeneration;
+    _cancelListeningSupport(notify: false);
     final digits = FileCredentialStore.digitsOf(phone);
     try {
       if (store is FileCredentialStore) {
         (store as FileCredentialStore).activePhone = digits;
       }
       final saved = await store.loadAccount();
+      if (switchGeneration != _accountGeneration) return false;
       if (saved == null) {
         lastError = '找不到该账号的保存凭据';
         return false;
       }
-      engine?.stop();
       session = null;
       config = accounts.loadAccount(digits);
       theme.set(config.theme);
       _buildClientAndEngine();
       await login(saved.phone, saved.password);
+      if (_accountGeneration != switchGeneration + 1) return false;
       _startRotateTimerIfNeeded();
       return true;
     } catch (e) {
+      if (_accountGeneration != switchGeneration + 1) return false;
       lastError = e.toString();
       logs.add(LogLevel.error, '切换账号失败：$e');
       notifyListeners();
       return false;
+    } finally {
+      if (switchOperation == _accountSwitchGeneration) {
+        _accountSwitchInProgress = false;
+      }
     }
   }
 
   /// Clear the saved account (§10.2): deletes credentials + the
   /// per-account config file, stops listening, returns to login.
   Future<void> clearAccount() async {
-    engine?.stop();
+    _invalidateAccountWork();
+    _cancelListeningSupport(notify: false);
     final phone = currentPhone;
     try {
       await store.clearAccount();
@@ -558,9 +721,35 @@ class AppState extends ChangeNotifier {
 
   // -- listening --------------------------------------------------------
 
-  Future<bool> startListening() async {
+  void _invalidateAccountWork() {
+    _accountGeneration++;
+    _sessionFuture = null;
+    _sessionRestoreGeneration++;
+    sessionRestoring = false;
+    _startListeningFuture = null;
+  }
+
+  Future<bool> startListening() {
+    final inFlight = _startListeningFuture;
+    if (inFlight != null) return inFlight;
+    final future = _startListening();
+    _startListeningFuture = future;
+    return future.whenComplete(() {
+      if (identical(_startListeningFuture, future)) {
+        _startListeningFuture = null;
+      }
+    });
+  }
+
+  Future<bool> _startListening() async {
+    if (_accountSwitchInProgress) return false;
     if (engine == null) return false;
+    final generation = ++_listenGeneration;
+    final accountGeneration = _accountGeneration;
+    _listenRequested = true;
+    currentPollStartedAt = null;
     if (currentPhone.isEmpty || _password == null || _password!.isEmpty) {
+      _listenRequested = false;
       lastError = '请先去设置页登录账号';
       logs.add(LogLevel.error, '启动失败：请先去设置页登录账号');
       notifyListeners();
@@ -572,33 +761,154 @@ class AppState extends ChangeNotifier {
     // from the moment listening starts). The engine still logs in
     // itself when this fails.
     await ensureSession();
-    final ok = await engine!.start(
+    if (!_listenAttemptIsCurrent(generation, accountGeneration)) {
+      if (generation == _listenGeneration &&
+          accountGeneration != _accountGeneration) {
+        _cancelListeningSupport();
+      }
+      return false;
+    }
+    final activeEngine = engine;
+    if (activeEngine == null) return false;
+    final ok = await activeEngine.start(
       currentPhone,
       _password!,
       initialSession: session,
     );
+    if (!_listenAttemptIsCurrent(generation, accountGeneration)) {
+      if (generation == _listenGeneration &&
+          accountGeneration != _accountGeneration) {
+        _cancelListeningSupport();
+      }
+      return false;
+    }
     if (!ok) {
+      _listenRequested = false;
       lastError = '启动失败，请查看运行日志';
       notifyListeners();
       return false;
     }
     listening = true;
-    unawaited(keepAlive?.start());
-    _startRotateTimerIfNeeded();
     _startWatchTimer();
+    _startRotateTimerIfNeeded();
     notifyListeners();
+    await _synchronizeKeepAlive();
+    if (!_listenAttemptIsCurrent(generation, accountGeneration)) {
+      if (generation == _listenGeneration &&
+          accountGeneration != _accountGeneration) {
+        _cancelListeningSupport();
+      }
+      return false;
+    }
     return true;
   }
 
   void stopListening() {
-    engine?.stop();
-    unawaited(keepAlive?.stop());
+    _cancelListeningSupport();
+  }
+
+  bool _listenAttemptIsCurrent(int generation, int accountGeneration) =>
+      _listenRequested &&
+      generation == _listenGeneration &&
+      accountGeneration == _accountGeneration;
+
+  void _cancelListeningSupport({bool stopEngine = true, bool notify = true}) {
+    _listenGeneration++;
+    _listenRequested = false;
+    currentPollStartedAt = null;
+    _startListeningFuture = null;
+    if (stopEngine) engine?.stop();
     listening = false;
     _watchTimer?.cancel();
     _watchTimer = null;
     _rotateTimer?.cancel();
     _rotateTimer = null;
-    notifyListeners();
+    unawaited(_synchronizeKeepAlive());
+    if (notify) notifyListeners();
+  }
+
+  /// Serialize native transitions so an older start cannot overtake a newer
+  /// stop after an account change or a quick stop/start sequence.
+  Future<T> _serializeKeepAlive<T>(Future<T> Function() operation) {
+    final completer = Completer<T>();
+    _keepAliveQueue = _keepAliveQueue.catchError((Object _) {}).then((_) async {
+      try {
+        completer.complete(await operation());
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
+  Future<void> _synchronizeKeepAlive() async {
+    await _serializeKeepAlive(() async {
+      final shouldRun = _listenRequested && (engine?.isRunning ?? false);
+      if (shouldRun) {
+        final started = await keepAlive?.start() ?? false;
+        if (Platform.isIOS) {
+          keepAliveStatus = await keepAlive?.status;
+          if (!started) {
+            logs.add(LogLevel.warning, 'iOS 音频保活未运行，当前只可在前台监听');
+          }
+        }
+      } else {
+        await keepAlive?.stop();
+        if (Platform.isIOS) {
+          keepAliveStatus = await keepAlive?.status;
+        }
+      }
+    });
+    if (!_disposed) notifyListeners();
+  }
+
+  Future<void> _refreshKeepAliveStatus({bool repair = false}) async {
+    if (!Platform.isIOS || _disposed) return;
+    if (_keepAliveCheckInFlight) {
+      _keepAliveRepairRequested |= repair;
+      return;
+    }
+    _keepAliveCheckInFlight = true;
+    try {
+      await _serializeKeepAlive(() async {
+        final status = await keepAlive?.status;
+        keepAliveStatus = status;
+        if (repair &&
+            _listenRequested &&
+            (engine?.isRunning ?? false) &&
+            status?.isRunning != true) {
+          final started = await keepAlive?.start() ?? false;
+          keepAliveStatus = await keepAlive?.status;
+          if (!started) {
+            logs.add(LogLevel.warning, '返回前台后音频保活恢复失败');
+          }
+        }
+      });
+    } finally {
+      _keepAliveCheckInFlight = false;
+      if (!_disposed) notifyListeners();
+      if (!_disposed && _keepAliveRepairRequested) {
+        _keepAliveRepairRequested = false;
+        unawaited(_refreshKeepAliveStatus(repair: true));
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    lastLifecycleState = state;
+    final changedAt = DateTime.now().toUtc();
+    lastLifecycleChangeAt = changedAt;
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      lastBackgroundedAt = changedAt;
+    } else if (state == AppLifecycleState.resumed) {
+      lastResumedAt = changedAt;
+    }
+    if (!_disposed) notifyListeners();
+    if (state == AppLifecycleState.resumed && _listenRequested) {
+      unawaited(_refreshKeepAliveStatus(repair: true));
+    }
   }
 
   /// Watches `engine.isRunning` once a second while listening, so an
@@ -607,16 +917,17 @@ class AppState extends ChangeNotifier {
   /// widget tests from settling.
   void _startWatchTimer() {
     _watchTimer?.cancel();
-    _watchTimer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) {
-        _syncListeningFlag();
-        if (!listening) {
-          _watchTimer?.cancel();
-          _watchTimer = null;
-        }
-      },
-    );
+    _watchTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _syncListeningFlag();
+      if (!listening) {
+        _watchTimer?.cancel();
+        _watchTimer = null;
+        return;
+      }
+      if (DateTime.now().second % 5 == 0) {
+        unawaited(_refreshKeepAliveStatus());
+      }
+    });
   }
 
   /// Online switch (§10.3): calls `setOnline`, rolls back on failure.
@@ -681,8 +992,7 @@ class AppState extends ChangeNotifier {
         logs.add(LogLevel.warning, '本周统计拉取失败：未登录');
         return;
       }
-      final result =
-          await fetchWeekStatistics(client, session: session);
+      final result = await fetchWeekStatistics(client, session: session);
       weekStats = result.stats;
       weekFallbackTotal = result.fallbackOrderTotal;
       if (result.stats == null && result.fallbackOrderTotal != null) {
@@ -711,11 +1021,7 @@ class AppState extends ChangeNotifier {
 
   // -- engine callbacks -------------------------------------------------
 
-  void _onGrab(
-    Map<String, dynamic> order,
-    String orderId,
-    int confirmCalls,
-  ) {
+  void _onGrab(Map<String, dynamic> order, String orderId, int confirmCalls) {
     final entry = HistoryStore.entryForOrder(
       order: order,
       outcome: HistoryOutcome.success,
@@ -778,10 +1084,7 @@ class AppState extends ChangeNotifier {
     _rotateTimer = null;
     if (!config.rotateEnabled) return;
     if (savedAccounts.length < 2) {
-      logs.add(
-        LogLevel.warning,
-        '账号轮换已开启，但只有一个账号，轮换不生效',
-      );
+      logs.add(LogLevel.warning, '账号轮换已开启，但只有一个账号，轮换不生效');
       return;
     }
     _rotateTimer = Timer(
@@ -791,7 +1094,9 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _rotateToNextAccount() async {
-    final phones = savedAccounts.map((a) => (a['phone'] ?? '').toString()).toList();
+    final phones = savedAccounts
+        .map((a) => (a['phone'] ?? '').toString())
+        .toList();
     if (phones.length < 2) return;
     final current = FileCredentialStore.digitsOf(currentPhone);
     final idx = phones.indexOf(current);
@@ -807,9 +1112,15 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    _invalidateAccountWork();
+    if (_lifecycleObserverRegistered) {
+      WidgetsBinding.instance.removeObserver(this);
+      _lifecycleObserverRegistered = false;
+    }
     _watchTimer?.cancel();
     _rotateTimer?.cancel();
-    engine?.stop();
+    _cancelListeningSupport(notify: false);
     super.dispose();
   }
 }

@@ -1,9 +1,11 @@
 // DPGrabber Flutter — `keep_alive` MethodChannel plugin (iOS side).
 //
 // Same channel name as Android (`com.doimty.dpgrabber/keep_alive`):
-// - `start` -> start the silent-audio loop, returns true.
+// - `start` -> start the silent-audio loop; true means engine + player are
+//   actually running.
 // - `stop` -> stop the loop, returns true.
 // - `isRunning` -> whether the loop is running.
+// - `getStatus` -> `{state, reason?}` for diagnostics.
 // - `updateNotification` -> no-op on iOS (no persistent notification);
 //   accepted so the Dart side can call it unconditionally.
 //
@@ -32,27 +34,45 @@ final class KeepAlivePlugin {
             binaryMessenger: messenger
         )
         channel.setMethodCallHandler { [weak self] call, result in
-            guard let self else {
-                result(FlutterError(code: "UNAVAILABLE",
-                                    message: "KeepAlivePlugin released",
-                                    details: nil))
-                return
+            DispatchQueue.main.async {
+                guard let self else {
+                    result(FlutterError(code: "UNAVAILABLE",
+                                        message: "KeepAlivePlugin released",
+                                        details: nil))
+                    return
+                }
+                switch call.method {
+                case "start":
+                    self.keepAlive.start { started in
+                        result(started)
+                    }
+                case "stop":
+                    self.keepAlive.stop {
+                        result(true)
+                    }
+                case "isRunning":
+                    self.keepAlive.isRunning { running in
+                        result(running)
+                    }
+                case "getStatus":
+                    self.keepAlive.status { status in
+                        result(status)
+                    }
+                case "updateNotification":
+                    // No persistent notification on iOS; accept and ignore.
+                    result(nil)
+                default:
+                    result(FlutterMethodNotImplemented)
+                }
             }
-            switch call.method {
-            case "start":
-                self.keepAlive.start()
-                result(true)
-            case "stop":
-                self.keepAlive.stop()
-                result(true)
-            case "isRunning":
-                result(self.keepAlive.state == .running)
-            case "updateNotification":
-                // No persistent notification on iOS; accept and ignore.
-                result(nil)
-            default:
-                result(FlutterMethodNotImplemented)
-            }
+        }
+    }
+
+    /// Kept for scene lifecycle callers. AudioKeepAlive also observes UIKit
+    /// lifecycle notifications as a fallback for older scene configurations.
+    func sceneDidBecomeActive() {
+        DispatchQueue.main.async { [weak self] in
+            self?.keepAlive.sceneDidBecomeActive()
         }
     }
 }

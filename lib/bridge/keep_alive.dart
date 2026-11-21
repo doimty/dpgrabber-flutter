@@ -43,11 +43,36 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart';
 
+/// A point-in-time snapshot of the native iOS keep-alive.
+///
+/// The audio mode is a best-effort execution hint, so callers must not infer
+/// that a running engine means the Dart isolate is guaranteed to run. The
+/// snapshot is still useful for distinguishing a healthy engine from an
+/// interrupted or failed native graph.
+class KeepAliveStatus {
+  final String state;
+  final String? reason;
+
+  const KeepAliveStatus({required this.state, this.reason});
+
+  bool get isRunning => state == 'running';
+
+  static KeepAliveStatus? fromPlatform(Object? value) {
+    if (value is! Map) return null;
+    final state = value['state']?.toString();
+    if (state == null || state.isEmpty) return null;
+    final reason = value['reason']?.toString();
+    return KeepAliveStatus(
+      state: state,
+      reason: reason == null || reason.isEmpty ? null : reason,
+    );
+  }
+}
+
 class KeepAlive {
   static const String channelName = 'com.doimty.dpgrabber/keep_alive';
 
-  static const MethodChannel defaultChannel =
-      MethodChannel(channelName);
+  static const MethodChannel defaultChannel = MethodChannel(channelName);
 
   final MethodChannel channel;
 
@@ -57,7 +82,7 @@ class KeepAlive {
   final bool forceSupported;
 
   KeepAlive({MethodChannel? channel, this.forceSupported = false})
-      : channel = channel ?? defaultChannel;
+    : channel = channel ?? defaultChannel;
 
   bool get isSupported =>
       forceSupported || Platform.isAndroid || Platform.isIOS;
@@ -100,6 +125,19 @@ class KeepAlive {
     }
   }
 
+  /// Read the native state without changing the keep-alive intent.
+  Future<KeepAliveStatus?> get status async {
+    if (!isSupported) return null;
+    try {
+      final raw = await channel.invokeMethod<Object?>('getStatus');
+      return KeepAliveStatus.fromPlatform(raw);
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
   /// Push a status line to the Android persistent notification.
   /// No-op on iOS / unsupported platforms. Best-effort, never throws;
   /// the native side throttles updates to one per 2 s (reference
@@ -107,10 +145,7 @@ class KeepAlive {
   Future<void> updateStatus(String text) async {
     if (!isSupported || text.isEmpty) return;
     try {
-      await channel.invokeMethod<void>(
-        'updateNotification',
-        {'text': text},
-      );
+      await channel.invokeMethod<void>('updateNotification', {'text': text});
     } on MissingPluginException {
       // No native side registered (e.g. plain `flutter test` host).
     } on PlatformException {
