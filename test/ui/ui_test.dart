@@ -5,6 +5,7 @@ library;
 
 import 'dart:io';
 
+import 'package:dpgrabber/bridge/keep_alive.dart';
 import 'package:dpgrabber/core.dart';
 import 'package:dpgrabber/main.dart';
 import 'package:dpgrabber/theme/app_theme.dart';
@@ -267,11 +268,10 @@ void main() {
       return state;
     }
 
-    /// Opens the account sheet from the card header.
     Future<void> openSheet(WidgetTester tester) async {
-      await tester.tap(find.text('加冰'));
+      await tester.tap(find.text('管理账号'));
       await tester.pumpAndSettle();
-      expect(find.text('切换账号'), findsOneWidget);
+      expect(find.text('账号管理'), findsOneWidget);
     }
 
     /// Opens the sheet, then the add form inside it.
@@ -289,7 +289,7 @@ void main() {
       );
     }
 
-    testWidgets('card opens the sheet; single account is one checked row',
+    testWidgets('account section action opens the sheet with one checked row',
         (tester) async {
       final state = await loggedInFakeState(tester);
       tallViewport(tester);
@@ -300,21 +300,20 @@ void main() {
       expect(find.text('加冰 · 138****0000 · 店 92'), findsNothing);
       expect(find.text('添加账号'), findsNothing);
       expect(find.text('清除已保存账号'), findsNothing);
-      // The card is the sheet entry: a chevron on the header row.
       expect(
         find.descendant(
           of: find.ancestor(
             of: find.text('加冰'),
-            matching: find.byType(InkWell),
+            matching: find.byType(AppCard),
           ),
           matching: find.byIcon(Icons.chevron_right),
         ),
-        findsOneWidget,
+        findsNothing,
       );
-      // Open the sheet: one checked row, add row, clear action.
       await tester.tap(find.text('加冰'));
       await tester.pumpAndSettle();
-      expect(find.text('切换账号'), findsOneWidget);
+      expect(find.text('账号管理'), findsNothing);
+      await openSheet(tester);
       expect(find.text('加冰 · 138****0000 · 店 92'), findsOneWidget);
       expect(find.byIcon(Icons.check), findsOneWidget);
       expect(find.text('添加账号'), findsOneWidget);
@@ -331,9 +330,9 @@ void main() {
         findsNothing,
       );
       // Close the sheet again via the X.
-      await tester.tap(find.byIcon(Icons.close));
+      await tester.tap(find.byTooltip('关闭'));
       await tester.pumpAndSettle();
-      expect(find.text('切换账号'), findsNothing);
+      expect(find.text('账号管理'), findsNothing);
     });
 
     testWidgets('no sheet entry when logged out', (tester) async {
@@ -346,7 +345,8 @@ void main() {
       await tester.pumpWidget(_wrap(state, SettingsPage(state: state)));
       await tester.pumpAndSettle();
       expect(find.text('添加账号'), findsNothing);
-      expect(find.text('切换账号'), findsNothing);
+      expect(find.text('账号管理'), findsNothing);
+      expect(find.text('管理账号'), findsNothing);
       expect(find.text('登录验证'), findsOneWidget);
       // The logged-out card is the login form, not a sheet entry:
       // no chevron on it.
@@ -427,7 +427,7 @@ void main() {
         containsAll(['13800000000', '13900000001']),
       );
       // Sheet dismissed; card header shows the new account.
-      expect(find.text('切换账号'), findsNothing);
+      expect(find.text('账号管理'), findsNothing);
       expect(find.text('添加账号'), findsNothing);
       expect(
         find.widgetWithText(TextField, '11 位手机号'),
@@ -506,7 +506,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(state.loginPhone, '13900000001');
       expect(state.session?.sid, '92');
-      expect(find.text('切换账号'), findsNothing);
+      expect(find.text('账号管理'), findsNothing);
       expect(find.text('139****0001'), findsOneWidget);
     });
 
@@ -526,14 +526,14 @@ void main() {
       expect(find.text('将删除已保存的手机号和密码。'), findsOneWidget);
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
-      expect(find.text('切换账号'), findsOneWidget);
+      expect(find.text('账号管理'), findsOneWidget);
       expect(state.loggedIn, isTrue);
       // Confirm: sheet dismisses, back to the login form.
       await tester.tap(find.text('清除已保存账号'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('清除'));
       await tester.pumpAndSettle();
-      expect(find.text('切换账号'), findsNothing);
+      expect(find.text('账号管理'), findsNothing);
       expect(state.loggedIn, isFalse);
       expect(find.text('登录验证'), findsOneWidget);
     });
@@ -863,35 +863,86 @@ void main() {
       expect(find.textContaining('今日成功'), findsOneWidget);
     });
 
-    testWidgets('shows completed Dart poll and lifecycle diagnostics',
+    testWidgets('keeps phone dashboard clear and opens diagnostics from settings',
         (tester) async {
       final state = await _testStateWith(tester);
       addTearDown(state.dispose);
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(320, 700);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      state.theme.set('night');
       state.listening = true;
-      state.currentPollStartedAt = DateTime.utc(2026, 11, 21, 3, 4, 4);
-
-      await tester.pumpWidget(_wrap(state, ListenPage(state: state)));
-      await tester.pumpAndSettle();
-      expect(
-          find.textContaining('Dart 轮询：randomList 请求进行中'), findsOneWidget);
-
-      state.currentPollStartedAt = null;
+      state.keepAliveStatus = const KeepAliveStatus(
+        state: 'interrupted',
+        reason: 'callActive',
+      );
       state.lastPollStartedAt = DateTime.utc(2026, 11, 21, 3, 4, 4);
       state.lastPollAt = DateTime.utc(2026, 11, 21, 3, 4, 5);
       state.lastPollDuration = const Duration(milliseconds: 850);
       state.lastPollSucceeded = true;
       state.completedPollCount = 7;
       state.failedPollCount = 2;
-      state.didChangeAppLifecycleState(AppLifecycleState.paused);
+      state.lastBackgroundPollAt = state.lastPollAt;
+      state.lastBackgroundPollSucceeded = true;
       state.didChangeAppLifecycleState(AppLifecycleState.resumed);
 
+      await tester.pumpWidget(_wrap(state, AppShell(state: state)));
       await tester.pumpAndSettle();
-      expect(find.textContaining('Dart 轮询：上次 randomList 成功'), findsOneWidget);
-      expect(find.textContaining('850 ms'), findsOneWidget);
-      expect(find.text('本进程内 Dart 请求累计：7 成功 · 2 失败'), findsOneWidget);
-      expect(find.textContaining('应用状态：resumed'), findsOneWidget);
-      expect(find.textContaining('后台'), findsOneWidget);
-      expect(find.textContaining('恢复'), findsOneWidget);
+      expect(find.text('停止监听').hitTestable(), findsOneWidget);
+      expect(find.text('后台诊断'), findsNothing);
+      expect(find.text('后台音频'), findsNothing);
+      expect(find.textContaining('850 ms'), findsNothing);
+      expect(
+        find.widgetWithText(SwitchRow, '接到单后自动停止监听'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('设置'));
+      await tester.pumpAndSettle();
+      expect(find.text('后台诊断'), findsNothing);
+      final settingsList = find.descendant(
+        of: find.byType(SettingsPage),
+        matching: find.byType(ListView),
+      );
+      final advancedEntry = find.text('高级设置');
+      await tester.scrollUntilVisible(
+        advancedEntry,
+        300,
+        scrollable: find.descendant(
+          of: settingsList,
+          matching: find.byType(Scrollable),
+        ).first,
+      );
+      await tester.drag(settingsList, const Offset(0, -160));
+      await tester.pumpAndSettle();
+      expect(advancedEntry.hitTestable(), findsOneWidget);
+      await tester.tap(advancedEntry);
+      await tester.pumpAndSettle();
+      final advancedScroll = find.descendant(
+        of: find.byType(AdvancedSettingsPage),
+        matching: find.byType(ListView),
+      );
+      await tester.scrollUntilVisible(
+        find.text('后台诊断'),
+        300,
+        scrollable: find.descendant(
+          of: advancedScroll,
+          matching: find.byType(Scrollable),
+        ).first,
+      );
+      await tester.tap(find.text('后台诊断'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('后台诊断'), findsOneWidget);
+      expect(find.text('已中断'), findsOneWidget);
+      expect(find.text('通话占用音频'), findsOneWidget);
+      expect(find.text('850 ms'), findsOneWidget);
+      expect(find.text('7 次成功 · 2 次失败'), findsOneWidget);
+      expect(find.text('前台'), findsOneWidget);
+      expect(find.text('最近后台轮询'), findsOneWidget);
+      expect(find.textContaining(RegExp(r'^成功 · ')), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 
@@ -1139,10 +1190,9 @@ void main() {
       expect(find.text('已保存账号'), findsNothing);
       expect(find.text('加冰 · 138****0000 · 店 92'), findsNothing);
       expect(find.text('清除已保存账号'), findsNothing);
-      // Tapping the card opens the sheet with the list.
-      await tester.tap(find.text('加冰'));
+      await tester.tap(find.text('管理账号'));
       await tester.pumpAndSettle();
-      expect(find.text('切换账号'), findsOneWidget);
+      expect(find.text('账号管理'), findsOneWidget);
       expect(find.text('加冰 · 138****0000 · 店 92'), findsOneWidget);
       expect(find.text('清除已保存账号'), findsOneWidget);
     });
@@ -1197,6 +1247,40 @@ void main() {
         find.text('暂无接单记录，抢到单后会自动出现在这里'),
         findsOneWidget,
       );
+    });
+
+    testWidgets('order actions are reachable by tap and long press',
+        (tester) async {
+      final state = await _testStateWith(tester);
+      addTearDown(state.dispose);
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(320, 700);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      final entry = HistoryStore.entryForOrder(
+        order: fakeOrder(),
+        outcome: HistoryOutcome.success,
+        reason: '',
+        account: state.currentPhone,
+        clerk: '测试',
+      );
+      await tester.runAsync(() async => state.historyStore.append(entry));
+      await tester.pumpWidget(_wrap(state, HistoryPage(state: state)));
+      await tester.pumpAndSettle();
+
+      final menuButton = find.byTooltip('订单操作');
+      expect(menuButton.hitTestable(), findsOneWidget);
+      await tester.tap(menuButton);
+      await tester.pumpAndSettle();
+      expect(find.text('复制订单号'), findsOneWidget);
+      await tester.tapAt(const Offset(16, 16));
+      await tester.pumpAndSettle();
+      expect(find.text('复制订单号'), findsNothing);
+
+      await tester.longPress(find.textContaining('订单号 ${entry.no}'));
+      await tester.pumpAndSettle();
+      expect(find.text('复制订单号'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 

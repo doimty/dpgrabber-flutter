@@ -85,7 +85,21 @@ class OutcomeChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = _paletteOf(context);
-    final color = palette.outcomeColor(outcome.name);
+    return StatusChip(
+      label: outcomeLabel(outcome.name),
+      color: palette.outcomeColor(outcome.name),
+    );
+  }
+}
+
+class StatusChip extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const StatusChip({super.key, required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
@@ -94,7 +108,7 @@ class OutcomeChip extends StatelessWidget {
         border: Border.all(color: color.withValues(alpha: 0.5)),
       ),
       child: Text(
-        outcomeLabel(outcome.name),
+        label,
         style: TextStyle(
           color: color,
           fontSize: 12,

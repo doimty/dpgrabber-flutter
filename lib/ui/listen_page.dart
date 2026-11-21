@@ -15,12 +15,12 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
-import '../bridge/keep_alive.dart' show KeepAliveStatus;
 import '../core.dart';
 import '../theme/app_theme.dart';
 import '../theme/palette.dart';
 import '../wenxi_ui/liquid_bottom_navigation.dart';
 import '../wenxi_ui/liquid_glass.dart';
+import '../wenxi_ui/liquid_overlays.dart';
 import 'app_state.dart';
 import 'log_store.dart';
 import 'widgets.dart';
@@ -66,8 +66,11 @@ class _ListenPageState extends State<ListenPage> {
     } else {
       final ok = await _state.startListening();
       if (!ok && mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(_state.lastError ?? '启动失败')));
+        showGlassMessage(
+          context,
+          _state.lastError ?? '启动失败',
+          aboveBottomNavigation: true,
+        );
       }
     }
   }
@@ -90,7 +93,6 @@ class _ListenPageState extends State<ListenPage> {
               ? '监听中'
               : (last == null ? '未开始监听' : '已停止');
           final loginLabel = _loginLabel(_state);
-          final keepAliveStatus = _state.keepAliveStatus;
           return Scaffold(
             appBar: AppBar(title: const Text('监听')),
             body: ListView(
@@ -110,10 +112,15 @@ class _ListenPageState extends State<ListenPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
+                      SizedBox(
+                        width: double.infinity,
+                        child: Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            Text(
                               '今日抢单 ${_state.todaySuccessCount}',
                               style: TextStyle(
                                 color: palette.textDark,
@@ -121,77 +128,23 @@ class _ListenPageState extends State<ListenPage> {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                          ),
-                          if (renewal != null)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
+                            if (renewal != null)
+                              StatusChip(
+                                label:
+                                    '续费率 ${renewal.toStringAsFixed(0)}% / '
+                                    '${renewalTarget.toStringAsFixed(0)}%',
                                 color: renewal >= renewalTarget
-                                    ? const Color(0xFF7BD88F)
-                                    : const Color(0xFFFFB4A8),
-                                borderRadius: BorderRadius.circular(12),
+                                    ? palette.outcomeColor('success')
+                                    : palette.historyReason,
                               ),
-                              child: Text(
-                                '${renewal >= renewalTarget ? '●' : '○'} '
-                                '续费率 ${renewal.toStringAsFixed(0)}% / 30%',
-                                style: const TextStyle(
-                                  color: Colors.black87,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 6),
                       Text(
                         '$listenLabel · $loginLabel',
                         style: TextStyle(color: palette.hint, fontSize: 13),
                       ),
-                      if (_state.listening) ...[
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            _pollDiagnosticLabel(_state),
-                            style: TextStyle(color: palette.hint, fontSize: 12),
-                          ),
-                        ),
-                        Text(
-                          '本进程内 Dart 请求累计：'
-                          '${_state.completedPollCount} 成功 · '
-                          '${_state.failedPollCount} 失败',
-                          style: TextStyle(color: palette.hint, fontSize: 12),
-                        ),
-                        Text(
-                          '应用状态：${_state.lastLifecycleState?.name ?? '未知'}'
-                          '（${_diagnosticTime(_state.lastLifecycleChangeAt)}） · '
-                          '后台 ${_diagnosticTime(_state.lastBackgroundedAt)} · '
-                          '恢复 ${_diagnosticTime(_state.lastResumedAt)}',
-                          style: TextStyle(color: palette.hint, fontSize: 12),
-                        ),
-                        Text(
-                          '这些是当前进程的点位记录；音频图运行不代表 Dart 轮询持续执行。',
-                          style: TextStyle(color: palette.hint, fontSize: 12),
-                        ),
-                      ],
-                      if (Platform.isIOS && _state.listening)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            '后台音频：${_keepAliveStateLabel(keepAliveStatus)}'
-                            '${_keepAliveReasonLabel(keepAliveStatus?.reason)} · '
-                            'iOS 仍可能暂停后台执行',
-                            style: TextStyle(
-                              color: keepAliveStatus?.isRunning == true
-                                  ? palette.hint
-                                  : palette.accent,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
                       if (stats != null)
                         Text(
                           '本周接单 ${stats.orderCount} · '
@@ -286,28 +239,37 @@ class _ListenPageState extends State<ListenPage> {
                     ),
                   ],
                 ),
-                CheckRow(
-                  label: '接到单后自动停止监听',
-                  value: _state.config.autoStopAfterGrab,
-                  onChanged: (v) async {
-                    if (v == null) return;
-                    await _state.updateConfig(
-                      _state.config.copyWith(autoStopAfterGrab: v),
-                    );
-                  },
-                ),
-                SwitchRow(
-                  label: '在线接单',
-                  subtitle: _state.online ? '当前在线' : '当前离线',
-                  value: _state.online,
-                  onChanged: (v) async {
-                    final ok = await _state.setOnline(v);
-                    if (!ok && context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('在线状态切换失败，已回滚')),
-                      );
-                    }
-                  },
+                const SizedBox(height: 12),
+                AppCard(
+                  child: Column(
+                    children: [
+                      SwitchRow(
+                        label: '在线接单',
+                        subtitle: _state.online ? '当前在线' : '当前离线',
+                        value: _state.online,
+                        onChanged: (v) async {
+                          final ok = await _state.setOnline(v);
+                          if (!ok && context.mounted) {
+                            showGlassMessage(
+                              context,
+                              '在线状态切换失败，已回滚',
+                              aboveBottomNavigation: true,
+                            );
+                          }
+                        },
+                      ),
+                      const Divider(height: 16),
+                      SwitchRow(
+                        label: '接到单后自动停止监听',
+                        value: _state.config.autoStopAfterGrab,
+                        onChanged: (v) async {
+                          await _state.updateConfig(
+                            _state.config.copyWith(autoStopAfterGrab: v),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
                 ),
                 // Item-type switches (§6.5).
                 if (_state.itemSwitchKnown && _state.itemSwitchNames.isNotEmpty)
@@ -334,8 +296,10 @@ class _ListenPageState extends State<ListenPage> {
                                 v,
                               );
                               if (!ok && context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('接单类型切换失败，已回滚')),
+                                showGlassMessage(
+                                  context,
+                                  '接单类型切换失败，已回滚',
+                                  aboveBottomNavigation: true,
                                 );
                               }
                             },
@@ -577,62 +541,4 @@ String _loginLabel(AppState state) {
     return '同步中…';
   }
   return '未登录';
-}
-
-String _keepAliveStateLabel(KeepAliveStatus? status) {
-  return switch (status?.state) {
-    'running' => '运行中',
-    'recovering' => '恢复中',
-    'interrupted' => '中断',
-    'failed' => '恢复失败',
-    'stopped' => '未运行',
-    _ => '状态未知',
-  };
-}
-
-String _keepAliveReasonLabel(String? reason) {
-  if (reason == null) return '';
-  return switch (reason) {
-    'callActive' => '（通话占用）',
-    'interruption' => '（系统音频中断）',
-    'resumeNotRequested' => '（等待返回前台）',
-    'mediaServicesReset' || 'mediaServicesLost' => '（等待音频服务恢复）',
-    'retryLimitExceeded' => '（重试次数已用尽）',
-    'audioSessionFailed' => '（音频会话失败）',
-    'audioEngineFailed' || 'audioNotRunning' => '（音频引擎未运行）',
-    _ => '',
-  };
-}
-
-String _pollDiagnosticLabel(AppState state) {
-  final inFlightAt = state.currentPollStartedAt;
-  if (inFlightAt != null) {
-    return 'Dart 轮询：randomList 请求进行中，开始 ${_diagnosticTime(inFlightAt)}';
-  }
-  final completedAt = state.lastPollAt;
-  if (completedAt == null) return 'Dart 轮询：尚无 randomList 完成记录';
-  final outcome = state.lastPollSucceeded == true ? '成功' : '失败';
-  final durationMs = state.lastPollDuration?.inMilliseconds;
-  final durationLabel = durationMs == null ? '' : ' · $durationMs ms';
-  return 'Dart 轮询：上次 randomList $outcome · '
-      '开始 ${_diagnosticTime(state.lastPollStartedAt)} · '
-      '完成 ${_diagnosticTime(completedAt)}$durationLabel';
-}
-
-String _diagnosticTime(DateTime? time) {
-  if (time == null) return '尚无';
-  final local = time.toLocal();
-  final offset = local.timeZoneOffset;
-  final sign = offset.isNegative ? '-' : '+';
-  final minutes = offset.inMinutes.abs();
-  final zone =
-      '$sign${(minutes ~/ 60).toString().padLeft(2, '0')}:'
-      '${(minutes % 60).toString().padLeft(2, '0')}';
-  return '${local.year.toString().padLeft(4, '0')}-'
-      '${local.month.toString().padLeft(2, '0')}-'
-      '${local.day.toString().padLeft(2, '0')} '
-      '${local.hour.toString().padLeft(2, '0')}:'
-      '${local.minute.toString().padLeft(2, '0')}:'
-      '${local.second.toString().padLeft(2, '0')}.'
-      '${local.millisecond.toString().padLeft(3, '0')} UTC$zone';
 }

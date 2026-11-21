@@ -115,6 +115,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   DateTime? lastLifecycleChangeAt;
   DateTime? lastBackgroundedAt;
   DateTime? lastResumedAt;
+  DateTime? lastBackgroundPollAt;
+  bool? lastBackgroundPollSucceeded;
+  final ValueNotifier<int> _diagnosticsVersion = ValueNotifier<int>(0);
+
+  Listenable get diagnosticsUpdates => _diagnosticsVersion;
 
   ClerkStatistics? weekStats;
   int? weekFallbackTotal;
@@ -251,7 +256,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       onPollStarted: (startedAt) {
         if (_disposed) return;
         currentPollStartedAt = startedAt;
-        notifyListeners();
+        _notifyDiagnosticsChanged();
       },
       onPoll: (startedAt, completedAt, duration, succeeded) {
         if (_disposed) return;
@@ -265,7 +270,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         } else {
           failedPollCount++;
         }
-        notifyListeners();
+        if (_isInBackground(lastLifecycleState)) {
+          lastBackgroundPollAt = completedAt;
+          lastBackgroundPollSucceeded = succeeded;
+        }
+        _notifyDiagnosticsChanged();
       },
     );
   }
@@ -721,6 +730,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   // -- listening --------------------------------------------------------
 
+  void _notifyDiagnosticsChanged() {
+    if (!_disposed) _diagnosticsVersion.value++;
+  }
+
   void _invalidateAccountWork() {
     _accountGeneration++;
     _sessionFuture = null;
@@ -823,6 +836,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _watchTimer = null;
     _rotateTimer?.cancel();
     _rotateTimer = null;
+    _notifyDiagnosticsChanged();
     unawaited(_synchronizeKeepAlive());
     if (notify) notifyListeners();
   }
@@ -859,7 +873,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
     });
-    if (!_disposed) notifyListeners();
+    _notifyDiagnosticsChanged();
   }
 
   Future<void> _refreshKeepAliveStatus({bool repair = false}) async {
@@ -886,7 +900,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       });
     } finally {
       _keepAliveCheckInFlight = false;
-      if (!_disposed) notifyListeners();
+      _notifyDiagnosticsChanged();
       if (!_disposed && _keepAliveRepairRequested) {
         _keepAliveRepairRequested = false;
         unawaited(_refreshKeepAliveStatus(repair: true));
@@ -896,20 +910,25 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    final wasInBackground = _isInBackground(lastLifecycleState);
     lastLifecycleState = state;
     final changedAt = DateTime.now().toUtc();
     lastLifecycleChangeAt = changedAt;
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden) {
+    if (_isInBackground(state) && !wasInBackground) {
       lastBackgroundedAt = changedAt;
+      lastBackgroundPollAt = null;
+      lastBackgroundPollSucceeded = null;
     } else if (state == AppLifecycleState.resumed) {
       lastResumedAt = changedAt;
     }
-    if (!_disposed) notifyListeners();
+    _notifyDiagnosticsChanged();
     if (state == AppLifecycleState.resumed && _listenRequested) {
       unawaited(_refreshKeepAliveStatus(repair: true));
     }
   }
+
+  bool _isInBackground(AppLifecycleState? state) =>
+      state == AppLifecycleState.hidden || state == AppLifecycleState.paused;
 
   /// Watches `engine.isRunning` once a second while listening, so an
   /// engine-side stop (e.g. auto-stop after a grab) is reflected in
@@ -1121,6 +1140,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _watchTimer?.cancel();
     _rotateTimer?.cancel();
     _cancelListeningSupport(notify: false);
+    _diagnosticsVersion.dispose();
     super.dispose();
   }
 }

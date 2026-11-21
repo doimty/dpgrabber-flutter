@@ -237,8 +237,15 @@ ThemeData appTheme(
       backgroundColor: surface,
       surfaceTintColor: Colors.transparent,
     ),
-    tooltipTheme: const TooltipThemeData(
-      waitDuration: Duration(milliseconds: 500),
+    tooltipTheme: TooltipThemeData(
+      waitDuration: const Duration(milliseconds: 500),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      textStyle: TextStyle(color: colors.onSurface, fontSize: 12),
+      decoration: BoxDecoration(
+        color: Color(tones.glass),
+        border: Border.all(color: colors.outlineVariant),
+        borderRadius: BorderRadius.circular(12),
+      ),
     ),
   );
 }

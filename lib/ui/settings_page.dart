@@ -7,9 +7,8 @@
 /// confirmation). There is no sign-out button: a saved account stays
 /// signed in across restarts (the app rebuilds the live session
 /// itself on cold start), and removing the account entirely is
-/// "清除已保存账号". The logged-in card shows the current identity
-/// ONLY (avatar, name, shop line, masked phone) and is the entry to
-/// the account sheet: tapping it opens a modal bottom sheet with
+/// "清除已保存账号". The logged-in card shows the current identity.
+/// The "管理账号" action opens a modal bottom sheet with
 /// every saved account (checkmark on the current one, tap switches
 /// and dismisses), the "+ 添加账号" row (same login form inline in
 /// the sheet), and the clear action separated at the sheet bottom.
@@ -42,20 +41,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core.dart';
-import '../theme/glass.dart';
 import '../wenxi_ui/liquid_bottom_navigation.dart';
 import '../wenxi_ui/liquid_glass.dart';
+import '../wenxi_ui/liquid_overlays.dart';
 import 'advanced_settings_page.dart';
 import 'app_state.dart';
 import 'settings_fields.dart';
 import 'widgets.dart';
 
-const _memoModeLabels = [
-  '不检测备注',
-  '有备注不抢',
-  '排除关键词',
-  '只抢关键词',
-];
+const _memoModeLabels = {
+  0: '不检测备注',
+  1: '有备注不抢',
+  2: '排除关键词',
+  3: '只抢关键词',
+};
 
 class SettingsPage extends StatefulWidget {
   final AppState state;
@@ -374,27 +373,14 @@ class _SettingsPageState extends State<SettingsPage>
   }
 
   Future<void> _clearSaved() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        final palette = _state.theme.palette;
-        return AlertDialog(
-          title: const Text('清除已保存账号'),
-          content: const Text('将删除已保存的手机号和密码。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: Text('取消', style: TextStyle(color: palette.accent)),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text('清除', style: TextStyle(color: palette.logError)),
-            ),
-          ],
-        );
-      },
+    final confirmed = await showGlassConfirmation(
+      context,
+      title: '清除已保存账号',
+      message: '将删除已保存的手机号和密码。',
+      confirmLabel: '清除',
+      destructive: true,
     );
-    if (confirmed == true) {
+    if (confirmed && mounted) {
       await _state.clearAccount();
       if (mounted) {
         _phoneController.clear();
@@ -404,11 +390,7 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
-  /// Logged-in account card content: the current identity only —
-  /// avatar, 17/w600 name, merged shop line, masked phone — plus a
-  /// chevron: the whole card is the entry to the account sheet
-  /// (§10.2). No saved-account rows, no add row, no clear button
-  /// live here any more.
+  /// Logged-in identity: avatar, name, shop, and masked phone.
   Widget _accountHeaderRow() {
     final palette = _state.theme.palette;
     return Row(
@@ -458,18 +440,12 @@ class _SettingsPageState extends State<SettingsPage>
             ],
           ),
         ),
-        Icon(Icons.chevron_right, color: palette.hint),
       ],
     );
   }
 
-  /// Account sheet (§10.2): the modal bottom sheet behind the
-  /// account card — same sheet styling as the history entry menu
-  /// (card background, dialog radius on the top corners, drag
-  /// handle), `isScrollControlled` so the keyboard fits the add
-  /// form. Content is rebuilt through [_sheetVersion] (see
-  /// [_setStateWithSheet]): list state or add-form state, selected
-  /// by [_sheetShowAdd]. Always opens on the list.
+  /// Always open on the account list. [_sheetVersion] keeps the
+  /// header and the body in sync when switching to the add form.
   Future<void> _openAccountSheet() async {
     if (!_state.loggedIn) return;
     // Fresh sheet state, applied with a page rebuild so a stale
@@ -480,14 +456,19 @@ class _SettingsPageState extends State<SettingsPage>
       _loginError = null;
       _sheetOpen = true;
     });
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: _state.theme.palette.cardBg,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(kDialogRadius),
+    await showGlassSheet<void>(
+      context,
+      scrollControlled: true,
+      headerBuilder: (context) => ValueListenableBuilder<int>(
+        valueListenable: _sheetVersion,
+        builder: (context, _, _) => GlassSheetHeader(
+          title: _sheetShowAdd ? '添加账号' : '账号管理',
+          onBack: _sheetShowAdd
+              ? () {
+                  FocusScope.of(context).unfocus();
+                  _setStateWithSheet(() => _sheetShowAdd = false);
+                }
+              : null,
         ),
       ),
       // The sheet is a new route above the page, so the page's
@@ -498,64 +479,14 @@ class _SettingsPageState extends State<SettingsPage>
         state: _state,
         child: ValueListenableBuilder<int>(
           valueListenable: _sheetVersion,
-          builder: (context, _, _) => SafeArea(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-              ),
-              child: _sheetShowAdd
-                  ? _accountSheetAddForm(sheetContext)
-                  : _accountSheetList(sheetContext),
-            ),
-          ),
+          builder: (context, _, _) => _sheetShowAdd
+              ? _accountSheetAddForm()
+              : _accountSheetList(sheetContext),
         ),
       ),
     );
     _sheetOpen = false;
     _sheetShowAdd = false;
-  }
-
-  /// Sheet header: centred 17/w600 title, close on the right,
-  /// back chevron on the left in the add-form state (returns to
-  /// the list). The empty 48-wide box in the list state keeps the
-  /// title centred.
-  Widget _sheetHeader({
-    required String title,
-    required BuildContext sheetContext,
-    VoidCallback? onBack,
-  }) {
-    final palette = _state.theme.palette;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-      child: Row(
-        children: [
-          if (onBack != null)
-            IconButton(
-              tooltip: '返回',
-              onPressed: onBack,
-              icon: Icon(Icons.chevron_left, color: palette.textDark),
-            )
-          else
-            const SizedBox(width: 48),
-          Expanded(
-            child: Text(
-              title,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: palette.textDark,
-                fontSize: 17,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: '关闭',
-            onPressed: () => Navigator.of(sheetContext).pop(),
-            icon: Icon(Icons.close, color: palette.hint),
-          ),
-        ],
-      ),
-    );
   }
 
   /// One saved-account row in the sheet: a selection, not a
@@ -599,20 +530,12 @@ class _SettingsPageState extends State<SettingsPage>
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _sheetHeader(title: '切换账号', sheetContext: sheetContext),
         for (final account in _state.savedAccounts)
           _sheetAccountRow(account, sheetContext),
-        const Divider(height: 24),
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          leading: Icon(
-            Icons.add_circle_outline,
-            color: palette.textDark,
-          ),
-          title: Text(
-            '添加账号',
-            style: TextStyle(color: palette.textDark),
-          ),
+        const Divider(height: 16, indent: 16, endIndent: 16),
+        GlassActionTile(
+          icon: Icons.add_rounded,
+          label: '添加账号',
           onTap: _loggingIn
               ? null
               : () {
@@ -624,17 +547,16 @@ class _SettingsPageState extends State<SettingsPage>
                   });
                 },
         ),
-        const Divider(height: 24),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-          child: TextButton(
-            onPressed: () => _clearSavedFromSheet(sheetContext),
-            child: Text(
-              '清除已保存账号',
-              style: TextStyle(
-                color: palette.logError,
-                fontSize: 15,
-              ),
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: _loggingIn
+                  ? null
+                  : () => _clearSavedFromSheet(sheetContext),
+              style: TextButton.styleFrom(foregroundColor: palette.logError),
+              child: const Text('清除已保存账号'),
             ),
           ),
         ),
@@ -647,35 +569,23 @@ class _SettingsPageState extends State<SettingsPage>
   /// suppressed while the sheet is open). Back returns to the
   /// list; success dismisses the sheet ([_login]); failure keeps
   /// the form open.
-  Widget _accountSheetAddForm(BuildContext sheetContext) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _sheetHeader(
-          title: '添加账号',
-          sheetContext: sheetContext,
-          onBack: () =>
-              _setStateWithSheet(() => _sheetShowAdd = false),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (_loginError != null) ErrorBanner(_loginError!),
-              _loginForm(
-                phoneController: _addPhoneController,
-                passwordController: _addPasswordController,
-                onSubmit: () => _login(isAdd: true),
-                header: '添加一个新账号，登录成功后会保存并切换过去',
-                submitHint: '请输入新账号的手机号和密码',
-              ),
-            ],
+  Widget _accountSheetAddForm() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_loginError != null) ErrorBanner(_loginError!),
+          _loginForm(
+            phoneController: _addPhoneController,
+            passwordController: _addPasswordController,
+            onSubmit: () => _login(isAdd: true),
+            header: '添加一个新账号，登录成功后会保存并切换过去',
+            submitHint: '请输入新账号的手机号和密码',
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -694,7 +604,7 @@ class _SettingsPageState extends State<SettingsPage>
 
   Future<void> _setMemoMode(int mode) async {
     await _state.updateConfig(_state.config.copyWith(memoMode: mode));
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   @override
@@ -720,21 +630,19 @@ class _SettingsPageState extends State<SettingsPage>
               24 + bottomNavClearance(context),
             ),
             children: [
-              // Account (§10.2): login lives here — the app never
-              // blocks on a standalone login page. The card holds
-              // the login form (logged out) or the current identity
-              // only (logged in); everything else — saved accounts,
-              // add, clear — lives in the account sheet behind the
-              // card.
-              const SectionTitle('账号'),
+              SectionTitle(
+                '账号',
+                trailing: _state.loggedIn
+                    ? TextButton(
+                        onPressed: _loggingIn ? null : _openAccountSheet,
+                        child: const Text('管理账号'),
+                      )
+                    : null,
+              ),
               if (_loginError != null && !_sheetOpen)
                 ErrorBanner(_loginError!),
               if (_state.loggedIn)
-                InkWell(
-                  onTap: _loggingIn ? null : _openAccountSheet,
-                  borderRadius: BorderRadius.circular(16),
-                  child: AppCard(child: _accountHeaderRow()),
-                )
+                AppCard(child: _accountHeaderRow())
               else
                 AppCard(
                   child: _loginForm(
@@ -770,24 +678,11 @@ class _SettingsPageState extends State<SettingsPage>
                       hint: '列表刷新节奏，默认 0.6',
                       apply: (cfg, v) => cfg.copyWith(pollIntervalSec: v),
                     ),
-                    DropdownButtonFormField<int>(
-                      initialValue: cfg.memoMode,
-                      icon: Icon(
-                        Icons.keyboard_arrow_down_rounded,
-                        size: 20,
-                        color: palette.hint,
-                      ),
-                      decoration: const InputDecoration(labelText: '备注检测'),
-                      items: [
-                        for (var i = 0; i < _memoModeLabels.length; i++)
-                          DropdownMenuItem(
-                            value: i,
-                            child: Text(_memoModeLabels[i]),
-                          ),
-                      ],
-                      onChanged: (v) {
-                        if (v != null) unawaited(_setMemoMode(v));
-                      },
+                    GlassSelectionField<int>(
+                      label: '备注检测',
+                      value: cfg.memoMode,
+                      options: _memoModeLabels,
+                      onSelected: (v) => unawaited(_setMemoMode(v)),
                     ),
                     const SizedBox(height: 10),
                     if (cfg.memoMode == 2) ...[

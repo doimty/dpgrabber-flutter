@@ -98,10 +98,10 @@ void main() {
       ),
     ));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('加冰'));
+    await tester.tap(find.text('管理账号'));
     await tester.pumpAndSettle();
     await _capture(tester, key, 'account-sheet-list.png');
-    expect(find.text('切换账号'), findsOneWidget);
+    expect(find.text('账号管理'), findsOneWidget);
     expect(find.text('加冰 · 138****0000 · 店 92'), findsOneWidget);
     expect(find.text('小红 · 139****0001 · 店 92'), findsOneWidget);
     expect(find.byIcon(Icons.check), findsOneWidget);
@@ -122,7 +122,7 @@ void main() {
       ),
     ));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('加冰'));
+    await tester.tap(find.text('管理账号'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('添加账号'));
     await tester.pumpAndSettle();

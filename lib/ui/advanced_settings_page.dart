@@ -6,7 +6,7 @@
 /// 失败退避 / TLS / 账号轮换 / 接单类型匹配词 / 抢单推送. Same
 /// auto-save semantics as the main page: text fields commit on
 /// submit / blur through [SettingsFieldCommitter], switches and
-/// dropdowns save immediately. No save button, no AES keys anywhere.
+/// selection fields save immediately. No save button, no AES keys anywhere.
 library;
 
 import 'dart:async';
@@ -14,7 +14,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core.dart';
+import '../wenxi_ui/liquid_overlays.dart';
 import 'app_state.dart';
+import 'background_diagnostics_page.dart';
 import 'settings_fields.dart';
 import 'widgets.dart';
 
@@ -95,7 +97,7 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage>
     await _state.updateConfig(
       _state.config.copyWith(notifyProvider: provider),
     );
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   Future<void> _testPush() async {
@@ -123,7 +125,7 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage>
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
               children: [
                 // Advanced (§10.5).
-                const SectionTitle('高级设置'),
+                const SectionTitle('监听与网络'),
                 AppCard(
                   child: Column(
                     children: [
@@ -260,25 +262,11 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage>
                           setState(() {});
                         },
                       ),
-                      DropdownButtonFormField<String>(
-                        initialValue: cfg.notifyProvider,
-                        icon: Icon(
-                          Icons.keyboard_arrow_down_rounded,
-                          size: 20,
-                          color: palette.hint,
-                        ),
-                        decoration:
-                            const InputDecoration(labelText: '推送渠道'),
-                        items: [
-                          for (final entry in _notifyProviderLabels.entries)
-                            DropdownMenuItem(
-                              value: entry.key,
-                              child: Text(entry.value),
-                            ),
-                        ],
-                        onChanged: (v) {
-                          if (v != null) unawaited(_setProvider(v));
-                        },
+                      GlassSelectionField<String>(
+                        label: '推送渠道',
+                        value: cfg.notifyProvider,
+                        options: _notifyProviderLabels,
+                        onSelected: (v) => unawaited(_setProvider(v)),
                       ),
                       const SizedBox(height: 10),
                       textField(
@@ -321,6 +309,22 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage>
                         ],
                       ),
                     ],
+                  ),
+                ),
+                const SectionTitle('排查问题'),
+                AppCard(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.monitor_heart_outlined, color: palette.hint),
+                    title: const Text('后台诊断'),
+                    subtitle: const Text('查看轮询、音频和前后台记录'),
+                    trailing: Icon(Icons.chevron_right, color: palette.hint),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => BackgroundDiagnosticsPage(state: _state),
+                      ),
+                    ),
                   ),
                 ),
               ],

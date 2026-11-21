@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import '../core.dart';
 import '../theme/app_theme.dart';
 import '../wenxi_ui/liquid_bottom_navigation.dart';
+import '../wenxi_ui/liquid_overlays.dart';
 import 'app_state.dart';
 import 'widgets.dart';
 
@@ -32,27 +33,14 @@ class _HistoryPageState extends State<HistoryPage> {
   AppState get _state => widget.state;
 
   Future<void> _clearHistory() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        final palette = _state.theme.palette;
-        return AlertDialog(
-          title: const Text('清空历史'),
-          content: const Text('将清空全部接单历史记录，此操作不可恢复。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: Text('取消', style: TextStyle(color: palette.accent)),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text('清空', style: TextStyle(color: palette.logError)),
-            ),
-          ],
-        );
-      },
+    final confirmed = await showGlassConfirmation(
+      context,
+      title: '清空历史',
+      message: '将清空全部接单历史记录，此操作不可恢复。',
+      confirmLabel: '清空',
+      destructive: true,
     );
-    if (confirmed == true) {
+    if (confirmed && mounted) {
       _state.historyStore.clear();
       _state.logs.add(LogLevel.info, '接单历史已清空');
       setState(() {});
@@ -60,7 +48,6 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 
   Future<void> _showEntryMenu(HistoryEntry entry) async {
-    final palette = _state.theme.palette;
     final hasWechat = entry.userWechatId.isNotEmpty;
     final hasMemo = entry.userMemo.isNotEmpty;
     final mode = _state.config.memoMode;
@@ -68,40 +55,36 @@ class _HistoryPageState extends State<HistoryPage> {
     final memoPreview = hasMemo && entry.userMemo.length > 18
         ? '${entry.userMemo.substring(0, 18)}…'
         : entry.userMemo;
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: palette.cardBg,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
-      ),
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              enabled: hasWechat,
-              title: Text(
-                hasWechat
-                    ? '拉黑微信号 ${entry.userWechatId}'
-                    : '该订单没有微信号',
-              ),
-              onTap: () => Navigator.of(context).pop('blacklist'),
-            ),
-            ListTile(
-              enabled: hasMemo,
-              title: Text(
-                hasMemo
-                    ? '把备注加入$keywordTarget「$memoPreview」'
-                    : '该订单没有备注',
-              ),
-              onTap: () => Navigator.of(context).pop('keyword'),
-            ),
-            ListTile(
-              title: const Text('复制订单号'),
-              onTap: () => Navigator.of(context).pop('copy'),
-            ),
-          ],
-        ),
+    final choice = await showGlassSheet<String>(
+      context,
+      title: '订单操作',
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GlassActionTile(
+            icon: Icons.block_rounded,
+            label: hasWechat
+                ? '拉黑微信号 ${entry.userWechatId}'
+                : '该订单没有微信号',
+            onTap: hasWechat
+                ? () => Navigator.of(context).pop('blacklist')
+                : null,
+          ),
+          GlassActionTile(
+            icon: Icons.playlist_add_rounded,
+            label: hasMemo
+                ? '把备注加入$keywordTarget「$memoPreview」'
+                : '该订单没有备注',
+            onTap: hasMemo
+                ? () => Navigator.of(context).pop('keyword')
+                : null,
+          ),
+          GlassActionTile(
+            icon: Icons.copy_rounded,
+            label: '复制订单号',
+            onTap: () => Navigator.of(context).pop('copy'),
+          ),
+        ],
       ),
     );
     if (choice == null || !mounted) return;
@@ -114,8 +97,10 @@ class _HistoryPageState extends State<HistoryPage> {
         await Clipboard.setData(ClipboardData(text: entry.no));
         _state.logs.add(LogLevel.info, '订单号已复制到剪贴板');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('订单号已复制到剪贴板')),
+          showGlassMessage(
+            context,
+            '订单号已复制到剪贴板',
+            aboveBottomNavigation: true,
           );
         }
     }
@@ -126,33 +111,17 @@ class _HistoryPageState extends State<HistoryPage> {
     final next = List<String>.of(old);
     if (!next.contains(wechatId)) next.add(wechatId);
     if (blacklistWouldOverwrite(old, next)) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) {
-          final palette = _state.theme.palette;
-          return AlertDialog(
-            title: const Text('黑名单将被覆盖'),
-            content: const Text('新黑名单与已有黑名单不同，确定要保存吗？'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: Text('取消', style: TextStyle(color: palette.accent)),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: Text('保存', style: TextStyle(color: palette.accent)),
-              ),
-            ],
-          );
-        },
+      final confirmed = await showGlassConfirmation(
+        context,
+        title: '黑名单将被覆盖',
+        message: '新黑名单与已有黑名单不同，确定要保存吗？',
+        confirmLabel: '保存',
       );
-      if (confirmed != true) return;
+      if (!confirmed || !mounted) return;
     }
     await _state.updateConfig(_state.config.copyWith(blacklist: next));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已拉黑 $wechatId')),
-      );
+      showGlassMessage(context, '已拉黑 $wechatId', aboveBottomNavigation: true);
     }
   }
 
@@ -175,8 +144,10 @@ class _HistoryPageState extends State<HistoryPage> {
     }
     await _state.updateConfig(nextConfig);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(note.isEmpty ? '已加入关键词' : note)),
+      showGlassMessage(
+        context,
+        note.isEmpty ? '已加入关键词' : note,
+        aboveBottomNavigation: true,
       );
     }
   }
@@ -267,18 +238,34 @@ class _HistoryPageState extends State<HistoryPage> {
                                   Row(
                                     children: [
                                       Expanded(
-                                        child: Text(
-                                          '${entry.grabbedAt}   '
-                                          '¥${entry.amount.toStringAsFixed(2)}   '
-                                          '订单号 ${entry.no}',
-                                          style: TextStyle(
-                                            color: palette.textDark,
-                                            fontSize: 13,
-                                          ),
+                                        child: Wrap(
+                                          crossAxisAlignment: WrapCrossAlignment.center,
+                                          spacing: 8,
+                                          runSpacing: 4,
+                                          children: [
+                                            Text(
+                                              '¥${entry.amount.toStringAsFixed(2)}',
+                                              style: TextStyle(
+                                                color: palette.textDark,
+                                                fontSize: 15,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            OutcomeChip(entry.outcome),
+                                          ],
                                         ),
                                       ),
-                                      OutcomeChip(entry.outcome),
+                                      IconButton(
+                                        tooltip: '订单操作',
+                                        icon: const Icon(Icons.more_horiz),
+                                        color: palette.hint,
+                                        onPressed: () => _showEntryMenu(entry),
+                                      ),
                                     ],
+                                  ),
+                                  Text(
+                                    '${entry.grabbedAt} · 订单号 ${entry.no}',
+                                    style: TextStyle(color: palette.hint, fontSize: 12),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
